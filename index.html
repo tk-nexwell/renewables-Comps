@@ -8,12 +8,28 @@
     2. Settings -> Pages -> Source: Deploy from a branch -> main / root
     3. Done. Single file, no build step, no dependencies.
 
-  LIVE PRICES
-    The Refresh button pulls quotes + 1y history from the Yahoo Finance chart API
-    through a public CORS relay, and recomputes market cap, EV and every multiple.
-    If the relays are down the page falls back to the embedded snapshot silently.
-    To use your own relay:  index.html?proxy=https://your-worker.workers.dev/?url={url}
-    (a six-line Cloudflare Worker is in the footer of the page).
+  LIVE PRICES — the permanent fix
+    Add these two files to the repo and prices refresh themselves on a schedule,
+    server-side, with no relay and nothing that can be rate-limited or CORS-blocked:
+        .github/workflows/refresh-prices.yml
+        scripts/fetch-prices.mjs
+    The Action writes prices.json next to this file; the page loads it same-origin
+    and recomputes market cap, EV and every multiple. Default schedule is weekdays
+    at 06:00 UTC — edit the cron line to taste. Nothing else to configure.
+
+    Without those files the Refresh button falls back to public CORS relays, and
+    if those fail it keeps the embedded snapshot. To point at your own relay:
+        index.html?proxy=https://your-worker.workers.dev/?url={url}
+    A Cloudflare Worker that serves as one:
+        export default {
+          async fetch(req) {
+            const target = new URL(req.url).searchParams.get("url");
+            if (!target) return new Response("missing url", { status: 400 });
+            const r = await fetch(target, { headers: { "User-Agent": "Mozilla/5.0" } });
+            return new Response(r.body, { status: r.status, headers: {
+              "content-type": "application/json", "access-control-allow-origin": "*" } });
+          }
+        }
 
   UPDATING FUNDAMENTALS
     EBITDA, net debt and share counts are in the DATA array near the top of the
@@ -130,7 +146,8 @@ svg text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
 .axlab{font-size:10.5px;fill:var(--muted);font-variant-numeric:tabular-nums}
 .barlab{font-size:11px;fill:var(--ink2)}
 .barlab.on{fill:var(--ink);font-weight:600}
-.barval{font-size:11px;fill:var(--ink);font-variant-numeric:tabular-nums;font-weight:600}
+.barval{font-size:11px;fill:var(--ink);font-variant-numeric:tabular-nums;font-weight:600;
+  paint-order:stroke;stroke:var(--surface);stroke-width:3px;stroke-linejoin:round}
 .barval.off{fill:var(--muted);font-weight:500}
 .reflab{font-size:10.5px;font-weight:600;font-variant-numeric:tabular-nums}
 
@@ -298,70 +315,67 @@ pre{background:var(--surface2);border:1px solid var(--border);border-radius:7px;
   </div>
 </div>
 
-<div class="card">
+<div class="card" id="tpcard">
   <div class="cardhead">
     <div>
-      <h2>Implied platform value</h2>
-      <p class="note">Applies the peer-set multiple above to your own 2030 EBITDA. Enterprise value basis — deduct net debt at exit for equity value.</p>
+      <h2>The listed universe is disappearing — take-privates since 2021</h2>
+      <p class="note" id="tpnote">Ten listed European renewables platforms have been acquired and delisted in five years. What infrastructure capital paid for them is the more direct read on an exit multiple than any screen price.</p>
     </div>
   </div>
-  <div class="implied">
-    <div class="iv">
-      <span class="k">Platform 2030E EBITDA (€m)</span>
-      <input type="number" id="ebitdaIn" value="100" min="0" step="5" aria-label="Platform 2030 EBITDA in EUR millions">
-    </div>
-    <div class="iv"><span class="k">At peer median</span><span class="v" id="ivMed">—</span></div>
-    <div class="iv"><span class="k">At peer mean</span><span class="v" id="ivAvg">—</span></div>
-    <div class="iv"><span class="k">Peer range (min–max)</span><span class="v" id="ivRng">—</span></div>
+  <div class="stats" id="tpstats" style="margin-bottom:16px"></div>
+  <div class="chartwrap" id="tpchart"></div>
+  <div class="tablewrap" style="margin-top:6px">
+    <table id="tptbl">
+      <thead><tr>
+        <th class="l">Target</th><th class="l">Acquirer</th><th class="l">Announced</th><th class="l">Delisted</th>
+        <th>Offer/sh</th><th>Premium</th><th>Equity</th><th>EV</th><th>EV/EBITDA</th><th>EV/MW</th>
+      </tr></thead>
+      <tbody id="tpbody"></tbody>
+    </table>
   </div>
+  <p class="note" style="margin:12px 0 0">Also delisted in the same window but excluded above for want of a meaningful EBITDA multiple: <strong>OX2</strong> (Sweden, EQT, SEK 60/share, +43% premium, Oct-2024) — a developer rather than an owner — and <strong>Tion Renewables</strong> (Germany, EQT, 2023). <strong>Atlantica Sustainable</strong> left Nasdaq for Energy Capital Partners at $22.00/share in 2024.</p>
 </div>
 
 <footer>
-  <div><strong style="color:var(--ink2)">Snapshot as at 29 July 2026.</strong> Fundamentals (EBITDA, net debt, share counts) are from the most recent company filing for each name — dates are shown in the Net debt column and on each company card. Consensus estimates are sell-side aggregates (MarketScreener / company-collected consensus), or company guidance where flagged. Prices update via the Refresh button; fundamentals do not, and should be re-cut after each results season.</div>
+  <details>
+    <summary>Method, caveats &amp; sources</summary>
+    <div style="margin-top:10px">
+      <h4>Basis</h4>
+      <div>Snapshot as at 29 July 2026. Fundamentals — EBITDA, net debt, share counts — are from the most recent filing for each name; the date sits in the Net debt column and on each company card. Forward figures are sell-side consensus, or company guidance where flagged. Prices refresh live; fundamentals do not, and should be re-cut after each results season.</div>
+      <div style="margin-top:8px">Market cap = live price × shares outstanding, ex-treasury where disclosed. EV = market cap + last reported net financial debt. Forward multiples apply <em>current</em> EV to forward EBITDA, the market convention, so they do not credit forecast deleveraging. Hybrids, minorities and US tax-equity balances are not added to EV; where material the row carries a ⚑ and the company card gives the amount. Median and mean run across the selected names only.</div>
 
-  <h4>How the multiples are built</h4>
-  <div>Market cap = live price × shares outstanding (ex-treasury where disclosed). EV = market cap + last reported net financial debt. Forward multiples apply <em>current</em> EV to forward EBITDA — the market convention — so they do not credit forecast deleveraging. Hybrids, minority interests and US tax-equity balances are <em>not</em> added to EV; where they are material the row carries a ⚑ and the company card spells out the amount. Median and mean are computed across the selected names only, ignoring any name where that metric is unavailable.</div>
+      <h4>Known comparability issues</h4>
+      <div>Several names book asset-rotation gains inside EBITDA — Acciona Energía (€614m of FY25 EBITDA), Solaria (€37m one-off in LTM), Energiekontor (development disposals), and Grenergy, whose LTM is conversely <em>depressed</em> because no rotation closed in Q1-26. The "Adjust LTM for one-offs" switch removes what can be quantified. Scatec consolidates partly-owned emerging-market SPVs, so its consolidated multiple is not like-for-like. Enel consolidates 70.1% of Endesa — holding both double-counts. EDPR's net debt is ~92% intercompany parent funding and excludes ~€2.9bn of tax equity.</div>
 
-  <h4>Known comparability issues (read before quoting a median)</h4>
-  <div>Several names book asset-rotation gains inside EBITDA — Acciona Energía (€614m of FY25 EBITDA), Solaria (€37m one-off gain in LTM), Energiekontor (development disposals) and Grenergy (whose LTM is conversely <em>depressed</em> because no rotation closed in Q1-26). The "Adjust LTM for one-offs" switch removes what can be quantified. Scatec consolidates partly-owned emerging-market SPVs, so its consolidated EV/EBITDA is not like-for-like. Enel consolidates 70.1% of Endesa — holding both in one peer set double-counts. EDPR's net debt is ~92% intercompany parent funding and excludes ~€2.9bn of tax equity.</div>
+      <h4>Take-private multiples</h4>
+      <div>The headline deal multiple is EV / last reported full-year EBITDA before closing, as compiled by Finexsi (MergerMarket / Capital IQ) in the AMF-appointed expert report on the Neoen offer — one consistent methodology across six of the deals. Albioma and Neoen are computed here on the same principle and flagged as such. Enterprise values are inclusive of non-recourse project debt in every case. Where the parties never published an EV — Solarpack, Opdenergy, Greenvolt, Albioma, Neoen — it is built from offer equity value plus last reported net debt, and the row says so. Hover any row for the alternative bases; they differ by several turns.</div>
 
-  <h4>Live price refresh</h4>
-  <div>The Refresh button pulls quotes and 1-year price history from the Yahoo Finance chart API through a public CORS relay, then recomputes market cap, EV and every multiple. It tries several relays in turn; if all of them are down or rate-limited the dashboard silently keeps the snapshot and the status pill turns amber — nothing breaks. Public relays are best-effort. For a permanent fix, deploy the six-line Cloudflare Worker below and load the page with <code>?proxy=https://your-worker.workers.dev/?url={url}</code>.</div>
+      <h4>Live prices</h4>
+      <div>The page looks for a same-origin <code>prices.json</code> first — written by the included GitHub Action, which needs no relay and cannot be rate-limited. If that file is absent it falls back to public CORS relays, and if those fail it keeps the snapshot and turns the status pill amber. Nothing breaks in any case.</div>
 
-  <details style="margin-top:8px">
-    <summary>Cloudflare Worker relay (free tier, ~2 minutes to deploy)</summary>
-    <pre>export default {
-  async fetch(req) {
-    const target = new URL(req.url).searchParams.get("url");
-    if (!target) return new Response("missing url", { status: 400 });
-    const r = await fetch(target, { headers: { "User-Agent": "Mozilla/5.0" } });
-    return new Response(r.body, {
-      status: r.status,
-      headers: { "content-type": "application/json",
-                 "access-control-allow-origin": "*" }
-    });
-  }
-}</pre>
+      <h4>Sources</h4>
+      <div>Company results reports, presentations and IR pages:
+        <a href="https://grenergy.eu/investors/" target="_blank" rel="noopener">Grenergy</a> ·
+        <a href="https://www.acciona-energia.com/shareholders-investors/" target="_blank" rel="noopener">Acciona Energía</a> ·
+        <a href="https://solariaenergia.com/en/investors/" target="_blank" rel="noopener">Solaria</a> ·
+        <a href="https://www.edpr-investors.com/" target="_blank" rel="noopener">EDP Renováveis</a> ·
+        <a href="https://www.ecoener.es/accionistas-e-inversores/" target="_blank" rel="noopener">Ecoener</a> ·
+        <a href="https://www.voltalia.com/investor-relations/" target="_blank" rel="noopener">Voltalia</a> ·
+        <a href="https://www.erg.eu/en/investor-relations/" target="_blank" rel="noopener">ERG</a> ·
+        <a href="https://www.scatec.com/investor/" target="_blank" rel="noopener">Scatec</a> ·
+        <a href="https://www.energiekontor.de/en/investor-relations.html" target="_blank" rel="noopener">Energiekontor</a> ·
+        <a href="https://www.iberdrola.com/shareholders-investors" target="_blank" rel="noopener">Iberdrola</a> ·
+        <a href="https://www.endesa.com/en/shareholders-and-investors" target="_blank" rel="noopener">Endesa</a> ·
+        <a href="https://www.enel.com/investors" target="_blank" rel="noopener">Enel</a>.
+        Deal documents: <a href="https://neoen.com/app/uploads/2025/01/10.-Neoen-Fairness-Opinion-Finexsi-01272025-vDEF.pdf" target="_blank" rel="noopener">Finexsi expert report on Neoen</a> ·
+        <a href="https://opdenergy.com/en/public-tender-offer-information/" target="_blank" rel="noopener">Opdenergy CNMV offer</a> ·
+        <a href="https://www.encavis.com/en/newsroom/press-releases/" target="_blank" rel="noopener">Encavis / KKR</a> ·
+        <a href="https://greenvolt.com/wp-content/uploads/2024/10/20241004-Project-Gama-Prospectus-EN.pdf" target="_blank" rel="noopener">Greenvolt prospectus</a>.
+        Consensus via <a href="https://www.marketscreener.com/" target="_blank" rel="noopener">MarketScreener</a>; prices via <a href="https://finance.yahoo.com/" target="_blank" rel="noopener">Yahoo Finance</a>.
+      </div>
+      <div style="margin-top:10px;font-size:10.5px">Prepared for internal discussion. Not investment advice, not a valuation opinion, and no substitute for diligence. Compiled from public sources and carries their errors.</div>
+    </div>
   </details>
-
-  <h4>Sources</h4>
-  <div style="margin-top:4px">Company results reports, presentations and IR pages:
-    <a href="https://grenergy.eu/investors/" target="_blank" rel="noopener">Grenergy</a> ·
-    <a href="https://www.acciona-energia.com/shareholders-investors/" target="_blank" rel="noopener">Acciona Energía</a> ·
-    <a href="https://solariaenergia.com/en/investors/" target="_blank" rel="noopener">Solaria</a> ·
-    <a href="https://www.edpr-investors.com/" target="_blank" rel="noopener">EDP Renováveis</a> ·
-    <a href="https://www.ecoener.es/accionistas-e-inversores/" target="_blank" rel="noopener">Ecoener</a> ·
-    <a href="https://www.voltalia.com/investor-relations/" target="_blank" rel="noopener">Voltalia</a> ·
-    <a href="https://www.erg.eu/en/investor-relations/" target="_blank" rel="noopener">ERG</a> ·
-    <a href="https://www.scatec.com/investor/" target="_blank" rel="noopener">Scatec</a> ·
-    <a href="https://www.energiekontor.de/en/investor-relations.html" target="_blank" rel="noopener">Energiekontor</a> ·
-    <a href="https://www.iberdrola.com/shareholders-investors" target="_blank" rel="noopener">Iberdrola</a> ·
-    <a href="https://www.endesa.com/en/shareholders-and-investors" target="_blank" rel="noopener">Endesa</a> ·
-    <a href="https://www.enel.com/investors" target="_blank" rel="noopener">Enel</a>.
-    Consensus estimates via <a href="https://www.marketscreener.com/" target="_blank" rel="noopener">MarketScreener</a> and company-published analyst consensus. Prices via <a href="https://finance.yahoo.com/" target="_blank" rel="noopener">Yahoo Finance</a>.
-  </div>
-
-  <div style="margin-top:12px;font-size:10.5px">Prepared for internal discussion purposes. Not investment advice, not a valuation opinion, and not a substitute for a fairness opinion or diligence. Figures compiled from public sources and carry the errors of those sources.</div>
 </footer>
 
 </div><!-- /wrap -->
@@ -625,6 +639,57 @@ const DATA = [
 }
 ];
 
+/* ============================================================================
+   PRECEDENT TAKE-PRIVATES — listed European renewables platforms, 2021-2025
+   Headline `mult` = EV / last reported full-year EBITDA before closing, on the
+   Finexsi (MergerMarket / Capital IQ) table in the AMF expert report on Neoen —
+   one consistent methodology across six of these deals. Albioma and Neoen are
+   computed here on the same principle. `alt` carries the other bases, which
+   differ by several turns. EVs include non-recourse project debt throughout.
+   ========================================================================== */
+const PRECEDENTS = [
+{ t:"Solarpack", ctry:"Spain", acq:"EQT Infrastructure", ann:"Jun-2021", del:"Dec-2021",
+  px:"€26.50", prem:45.0, premB:"vs €18.28 close, 15-Jun-21", eq:881, evv:1250, evPub:false,
+  mult:21.7, multSrc:"Finexsi (last FY before closing)",
+  alt:"20.8x on LTM to Jun-21 · 19.1x on FY2020A", mw:545, evmw:2.29,
+  note:"Bought on an 8 GW development pipeline against a shrinking EBITDA base — on run-rate H1-21 earnings the multiple is nearer 26x. Arbitrage funds took ~20% of the register trying to force a bump and EQT never moved. 96.0% acceptance, then squeeze-out." },
+{ t:"Falck Renewables", ctry:"Italy", acq:"JP Morgan IIF", ann:"Oct-2021", del:"May-2022",
+  px:"€8.81", prem:29.2, premB:"vs 3-month VWAP; clean one-day undisturbed obscured by a prior press leak", eq:2500, evv:3400, evPub:true,
+  mult:20.4, multSrc:"Finexsi (last FY before closing)",
+  alt:"17.4x on FY2020A · 16.4x on FY2021A", mw:1320, evmw:2.58,
+  note:"The only deal here where an enterprise value was published with an explicit net-debt bridge (€812m at 30-Jun-21). Two fairness opinions, Lazard and Rothschild. ERG shares rose 7% on the read-across." },
+{ t:"Albioma", ctry:"France", acq:"KKR", ann:"Apr-2022", del:"Sep-2022",
+  px:"€50.00", prem:51.6, premB:"vs €33.54 close, 7-Mar-22 — the highest premium in the set", eq:1600, evv:2480, evPub:false,
+  mult:11.5, multSrc:"computed, FY2021A",
+  alt:"11.3–11.8x on FY2022 company guidance", mw:1000, evmw:2.48,
+  note:"The cleanest EBITDA in the set — long-dated contracted French overseas PPAs with no development gains — and by some distance the lowest multiple. 85% of gross debt was project-level. Biomass and thermal rather than solar, so treat €/MW with care." },
+{ t:"Opdenergy", ctry:"Spain", acq:"Antin Infrastructure", ann:"Jun-2023", del:"Apr-2024",
+  px:"€5.85", prem:46.3, premB:"vs €4.00 close, 9-Jun-23 — but off a base 16% below the 2022 IPO price", eq:866, evv:1500, evPub:false,
+  mult:15.5, multSrc:"Finexsi (last FY before closing)",
+  alt:"13.0x on LTM to Jun-23 · 17.5x on FY2022A", mw:1064, evmw:1.41,
+  note:"The closest analogue to a Spanish solar platform sale. The €5.85 landed 8% above the top of Kroll's independent €4.10–5.40 DCF range, with fairness opinions from BBVA and Société Générale and 99.6% acceptance — the best-evidenced 'full price' in the set. Cheapest €/MW here." },
+{ t:"Greenvolt", ctry:"Portugal", acq:"KKR", ann:"Dec-2023", del:"Nov-2024",
+  px:"€8.30", prem:11.5, premB:"vs €7.45 close, 20-Dec-23; +32% to the 6-month VWAP", eq:1160, evv:1850, evPub:false,
+  mult:15.1, multSrc:"Finexsi (last FY before closing)",
+  alt:"18.0x on FY2023A", mw:388, evmw:4.77,
+  note:"Lowest one-day premium in the set — the shares had already fallen a long way. The €4.77m/MW is not an asset price: KKR was buying an 8.4 GW pipeline across 17 markets and a distributed-generation platform, not 388 MW of plant." },
+{ t:"Encavis", ctry:"Germany", acq:"KKR + Viessmann", ann:"Mar-2024", del:"Jan-2025",
+  px:"€17.50", prem:54.2, premB:"vs €11.35 close, 5-Mar-24", eq:2800, evv:4736, evPub:true,
+  mult:14.7, multSrc:"Finexsi (last FY before closing)",
+  alt:"15.8x on 2024E — the multiple KKR itself published · 19.0x on FY2024 actual, with hindsight", mw:2200, evmw:2.15,
+  note:"Goldman Sachs and Lazard both called €17.50 financially adequate, yet the later squeeze-out was set at €17.23 — below the offer — and minorities filed appraisal proceedings. Pre-bid sell-side targets ran €19–24. Net debt/EBITDA was ~6x at the time." },
+{ t:"Neoen", ctry:"France", acq:"Brookfield (with Temasek)", ann:"May-2024", del:"Apr-2025",
+  px:"€39.85", prem:27.4, premB:"vs €31.40 close, 29-May-24", eq:6100, evv:9100, evPub:false,
+  mult:20.1, multSrc:"computed, FY2023A",
+  alt:"~19.7x on 2024E · ~13.6x on 2025E guidance. EV ranges €8.5–9.5bn on the net-debt definition", mw:5163, evmw:1.85,
+  note:"The expensive outlier — and the price was set by a 53% control block that the French mandatory-offer regime then forced onto every other holder. Finexsi's own DCF put the shares at €27–33 and her listed comparables at €24–25: the offer sat 20–60% above every intrinsic method she ran." },
+{ t:"Terna Energy", ctry:"Greece", acq:"Masdar", ann:"Jun-2024", del:"May-2025",
+  px:"€20.00", prem:6.3, premB:"all-in incl. €0.38 dividend; the stock had already re-rated on a year of sale speculation", eq:2400, evv:3200, evPub:true,
+  mult:16.5, multSrc:"Finexsi (last FY before closing)",
+  alt:"18.5x on FY2023A · 15.2x on FY2024A · ~13.5x on 2024 guidance per Eurobank", mw:1227, evmw:2.61,
+  note:"Thinnest premium in the set — only +3.5% over the statutory six-month VWAP at the tender stage, and no formal challenge followed. The €/MW is inflated because the 680 MW Amfilochia pumped-storage build sits inside the EV with no EBITDA yet." }
+];
+
 const CORE6 = ["GRE","ANE","SLR","EDPR","ERG","VLTSA"];
 
 /* short labels for the chart axis */
@@ -701,16 +766,16 @@ function renderStats(){
    <div class="tile"><div class="k">Aggregate EV</div><div class="v" style="font-size:19px">${
       n ? eurm(peerSet().reduce((s,c)=>s+ev(c),0)) : "—"}</div>
      <div class="n">sum of the selected names</div></div>`;
-  renderImplied(med, avg, vals);
 }
 
-function renderImplied(med, avg, vals){
-  const e = parseFloat($("#ebitdaIn").value);
-  const ok = isFinite(e) && e > 0 && S.metric !== "lev";
-  $("#ivMed").textContent = ok && med!=null ? eurm(e*med) : (S.metric==="lev" ? "n/a on leverage" : "—");
-  $("#ivAvg").textContent = ok && avg!=null ? eurm(e*avg) : (S.metric==="lev" ? "n/a on leverage" : "—");
-  $("#ivRng").textContent = ok && vals.length
-      ? eurm(e*Math.min(...vals)) + " – " + eurm(e*Math.max(...vals)) : "—";
+/* the listed peer median on a forward basis — the anchor the take-private
+   panel benchmarks against. Falls back through 26E -> 27E -> LTM. */
+function listedAnchor(){
+  for (const m of ["ev26","ev27","evL"]){
+    const v = median(peerVals(m));
+    if (v != null) return { v, m };
+  }
+  return { v:null, m:null };
 }
 
 /* ========================================================== chart ======== */
@@ -787,8 +852,6 @@ const COLS = [
   {k:"_c",   t:"",              l:true,  s:false},
   {k:"name", t:"Company",       l:true,  s:true},
   {k:"_b",   t:"Group",         l:true,  s:true},
-  {k:"px",   t:"Price",         s:true},
-  {k:"_chg", t:"1D",            s:true},
   {k:"_mc",  t:"Mkt cap",       s:true},
   {k:"nd",   t:"Net debt",      s:true},
   {k:"_ev",  t:"EV",            s:true},
@@ -797,8 +860,6 @@ const COLS = [
   {k:"ev26", t:"EV/EBITDA 26E", s:true},
   {k:"ev27", t:"EV/EBITDA 27E", s:true},
   {k:"lev",  t:"ND/EBITDA",     s:true},
-  {k:"_emw", t:"EV/MW",         s:true},
-  {k:"_spk", t:"1Y",            s:false},
   {k:"_z",   t:"",              s:false}
 ];
 function cellSortVal(c,k){
@@ -830,14 +891,10 @@ function renderTable(){
 
   $("#tbody").innerHTML = rows.map(c=>{
     const on = S.sel.has(c.id);
-    const chg = c.prev ? (c.px/c.prev-1)*100 : null;
-    const cur = c.ccy==="NOK" ? "kr" : "€";
     return `<tr class="${on?"on":""}" data-id="${c.id}">
       <td class="l"><input class="chk" type="checkbox" ${on?"checked":""} aria-label="Include ${c.name}"></td>
       <td class="l nm">${c.name}<span class="tic">${c.tic}</span>${c.flags.length?`<span class="flag" title="${c.flags.length} comparability flag${c.flags.length>1?"s":""} — open the card">⚑</span>`:""}</td>
       <td class="l"><span class="tag">${BUCKETS[c.bucket]}</span></td>
-      <td>${cur}${c.px.toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:c.px<20?3:2})}</td>
-      <td class="${chg==null?"na":chg>=0?"up":"dn"}">${chg==null?"—":pctS(chg)}</td>
       <td>${eurm(mcap(c))}</td>
       <td title="as at ${c.ndDate}">${eurm(c.nd)}</td>
       <td>${eurm(ev(c))}</td>
@@ -846,8 +903,6 @@ function renderTable(){
       <td>${fx1(metricVal(c,"ev26"))}</td>
       <td>${fx1(metricVal(c,"ev27"))}</td>
       <td>${fx1(metricVal(c,"lev"))}</td>
-      <td>${evmw(c)==null?'<span class="na">n/m</span>':fx2(evmw(c))}</td>
-      <td>${spark(c)}</td>
       <td><button class="zoom" title="Open company card" aria-label="Open ${c.name} card">⤢</button></td>
     </tr>`;
   }).join("");
@@ -882,6 +937,95 @@ function spark(c){
      stroke="${up?"var(--good)":"var(--crit)"}" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
 }
 
+/* ================================================== take-privates ======== */
+function renderTP(){
+  const mults = PRECEDENTS.map(d=>d.mult);
+  const med = median(mults), avg = mean(mults);
+  const evmws = PRECEDENTS.map(d=>d.evmw).filter(v=>v!=null);
+  const anchor = listedAnchor();
+  const gap = (anchor.v!=null && med!=null) ? (med/anchor.v - 1)*100 : null;
+  const anchorLab = anchor.m==="ev26" ? "2026E" : anchor.m==="ev27" ? "2027E" : anchor.m==="evL" ? "LTM" : "";
+
+  $("#tpstats").innerHTML = `
+   <div class="tile"><div class="k">Platforms delisted</div><div class="v">10</div>
+     <div class="n">European listed, since 2021</div></div>
+   <div class="tile accent"><div class="k">Median paid</div><div class="v">${med.toFixed(1)}<small>x</small></div>
+     <div class="n">EV / last reported FY EBITDA</div></div>
+   <div class="tile"><div class="k">Mean paid</div><div class="v">${avg.toFixed(1)}<small>x</small></div>
+     <div class="n">${mults.length} deals with a usable multiple</div></div>
+   <div class="tile"><div class="k">Range</div><div class="v" style="font-size:19px">${
+      Math.min(...mults).toFixed(1)}x – ${Math.max(...mults).toFixed(1)}x</div>
+     <div class="n">Albioma cheapest, Solarpack dearest</div></div>
+   <div class="tile"><div class="k">Median €/MW paid</div><div class="v">€${median(evmws).toFixed(2)}<small>m</small></div>
+     <div class="n">on operating capacity</div></div>
+   <div class="tile"><div class="k">Private vs public gap</div><div class="v" style="color:${gap>0?"var(--good)":"var(--crit)"}">${
+      gap==null ? "—" : (gap>0?"+":"")+gap.toFixed(0)+"%"}</div>
+     <div class="n">${anchor.v==null?"select some peers":`${med.toFixed(1)}x paid vs ${anchor.v.toFixed(1)}x listed ${anchorLab}`}</div></div>`;
+
+  /* chronological bar chart — the trend is the point, so do not sort by size */
+  const W = Math.max(680, ($("#tpchart").clientWidth||900));
+  const padL = 132, padR = 58, padT = 46, padB = 30, rowH = 27;
+  const H = padT + PRECEDENTS.length*rowH + padB;
+  const maxV = Math.max(...mults, anchor.v||0) * 1.14;
+  const x = v => padL + (v/maxV)*(W-padL-padR);
+  const step = maxV > 22 ? 5 : 2.5;
+  let s = `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" role="img"
+    aria-label="EV/EBITDA paid in each take-private, in announcement order">`;
+  for(let t=0;t<=maxV;t+=step){
+    s += `<line x1="${x(t).toFixed(1)}" y1="${padT-12}" x2="${x(t).toFixed(1)}" y2="${H-padB+2}" stroke="var(--grid)" stroke-width="1"/>
+      <text class="axlab" x="${x(t).toFixed(1)}" y="${H-padB+16}" text-anchor="middle">${t%1?t.toFixed(1):t}x</text>`;
+  }
+  s += `<line x1="${padL}" y1="${padT-12}" x2="${padL}" y2="${H-padB+2}" stroke="var(--axis)" stroke-width="1"/>`;
+
+  PRECEDENTS.forEach((d,i)=>{
+    const y = padT + i*rowH, bh = 15, r = 4, bw = Math.max(x(d.mult)-padL, 0.5);
+    s += `<g class="bar" tabindex="0" data-i="${i}" aria-label="${d.t}, ${d.ann}, ${d.mult} times">
+      <rect x="0" y="${y-4}" width="${W}" height="${rowH-2}" fill="transparent"/>
+      <text class="barlab on" x="${padL-10}" y="${y+bh/2+4}" text-anchor="end">${d.t}</text>
+      <path d="M${padL} ${y} h${bw-r} a${r} ${r} 0 0 1 ${r} ${r} v${bh-2*r} a${r} ${r} 0 0 1 ${-r} ${r} H${padL} z"
+            fill="var(--s1)" opacity=".92"/>
+      <text class="barval" x="${(padL+bw+7).toFixed(1)}" y="${y+bh/2+4}">${d.mult.toFixed(1)}x</text>
+      <text class="axlab" x="${(padL+bw+46).toFixed(1)}" y="${y+bh/2+4}">${d.ann}</text>
+    </g>`;
+  });
+
+  const rl = (v,color,label,row)=>{
+    if(v==null) return "";
+    const px = x(v), anchorPos = px > W-padR-70 ? "end" : px < padL+70 ? "start" : "middle";
+    return `<line x1="${px.toFixed(1)}" y1="${padT-12}" x2="${px.toFixed(1)}" y2="${H-padB+2}" stroke="${color}" stroke-width="2"/>
+      <text class="reflab" x="${px.toFixed(1)}" y="${padT-30+row*13}" text-anchor="${anchorPos}" fill="${color}">${label} ${v.toFixed(1)}x</text>`;
+  };
+  const closeTo = (anchor.v!=null) && Math.abs(x(anchor.v)-x(med)) < 150;
+  s += rl(med,"var(--s2)","Median paid", closeTo ? 0 : 1);
+  s += rl(anchor.v,"var(--s3)","Listed peers today", 1);
+  s += `</svg>`;
+  $("#tpchart").innerHTML = s;
+  $("#tpchart").querySelectorAll(".bar").forEach(g=>{
+    g.addEventListener("mousemove", e=>showDealTip(e, PRECEDENTS[+g.dataset.i]));
+    g.addEventListener("mouseleave", hideTip);
+  });
+
+  $("#tpbody").innerHTML = PRECEDENTS.map((d,i)=>`
+    <tr data-i="${i}">
+      <td class="l nm">${d.t}<span class="tic">${d.ctry}</span></td>
+      <td class="l" style="color:var(--ink2)">${d.acq}</td>
+      <td class="l">${d.ann}</td>
+      <td class="l">${d.del}</td>
+      <td>${d.px}</td>
+      <td class="up">+${d.prem.toFixed(1)}%</td>
+      <td>${eurm(d.eq)}</td>
+      <td>${eurm(d.evv)}${d.evPub?"":'<span class="flag" title="No enterprise value was published by the parties — built from offer equity value plus last reported net debt">⚑</span>'}</td>
+      <td style="font-weight:600">${d.mult.toFixed(1)}x</td>
+      <td>€${d.evmw.toFixed(2)}m</td>
+    </tr>`).join("");
+  $("#tpbody").querySelectorAll("tr").forEach(tr=>{
+    const d = PRECEDENTS[+tr.dataset.i];
+    tr.style.cursor = "help";
+    tr.addEventListener("mousemove", e=>showDealTip(e,d));
+    tr.addEventListener("mouseleave", hideTip);
+  });
+}
+
 /* ========================================================== tooltip ====== */
 const tip = $("#tip");
 function showTip(e, c){
@@ -898,7 +1042,9 @@ function showTip(e, c){
     <div class="r"><span>Net debt / EBITDA</span><span>${fx1(metricVal(c,"lev"))}</span></div>
     <div class="r"><span>Capacity</span><span>${c.mw?nf(c.mw)+" MW":"—"}</span></div>
     <div class="r"><span>Consensus target</span><span>${tpTxt}${up!=null?` (${up>=0?"+":""}${up.toFixed(0)}%)`:""}</span></div>
-    ${chg!=null?`<div class="r"><span>Today</span><span class="${chg>=0?"up":"dn"}">${pctS(chg)}</span></div>`:""}
+    <div class="r"><span>Price${chg!=null?" · today":""}</span><span>${cur}${c.px.toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:3})}${
+      chg!=null?` <span class="${chg>=0?"up":"dn"}">${pctS(chg)}</span>`:""}</span></div>
+    ${c.hist&&c.hist.length>3?`<div class="r" style="align-items:center"><span>1-year trend</span><span>${spark(c)}</span></div>`:""}
     <div class="d">${c.desc}</div>
     <div class="hint">Click to ${S.sel.has(c.id)?"remove from":"add to"} the peer set · double-click for the full card</div>`;
   tip.classList.add("on");
@@ -909,6 +1055,31 @@ function showTip(e, c){
   tip.style.left = x+"px"; tip.style.top = y+"px";
 }
 function hideTip(){ tip.classList.remove("on"); }
+
+function showDealTip(e, d){
+  if(!d) return;
+  const anchor = listedAnchor();
+  const gap = anchor.v!=null ? (d.mult/anchor.v-1)*100 : null;
+  tip.innerHTML = `<div class="t">${d.t} <span style="color:var(--muted);font-weight:500">${d.ctry}</span></div>
+    <div class="r"><span>Acquirer</span><span>${d.acq}</span></div>
+    <div class="r"><span>Announced · delisted</span><span>${d.ann} · ${d.del}</span></div>
+    <div class="r"><span>Offer per share</span><span>${d.px}</span></div>
+    <div class="r"><span>Premium</span><span class="up">+${d.prem.toFixed(1)}%</span></div>
+    <div class="r"><span>Equity · enterprise value</span><span>${eurm(d.eq)} · ${eurm(d.evv)}</span></div>
+    <div class="r"><span>Operating capacity</span><span>${nf(d.mw)} MW</span></div>
+    <div class="r"><span>EV / EBITDA paid</span><span>${d.mult.toFixed(1)}x</span></div>
+    ${gap!=null?`<div class="r"><span>vs listed peers today</span><span class="${gap>=0?"up":"dn"}">${gap>=0?"+":""}${gap.toFixed(0)}%</span></div>`:""}
+    <div class="d"><strong style="color:var(--ink)">Basis:</strong> ${d.multSrc}. Other bases: ${d.alt}.
+      ${d.evPub?"Enterprise value was published by the parties.":"No enterprise value was published — built from offer equity value plus last reported net debt."}</div>
+    <div class="d" style="border-top:none;padding-top:0;margin-top:6px">${d.note}</div>
+    <div class="hint">Premium ${d.premB}</div>`;
+  tip.classList.add("on");
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  let x = e.clientX + 16, y = e.clientY + 16;
+  if (x + w > innerWidth - 10) x = e.clientX - w - 16;
+  if (y + h > innerHeight - 10) y = Math.max(10, innerHeight - h - 10);
+  tip.style.left = x+"px"; tip.style.top = y+"px";
+}
 
 /* ========================================================== card ========= */
 function openCard(id){
@@ -1077,7 +1248,7 @@ function drawPx(c){
 
 /* ========================================================== actions ====== */
 function toggle(id){ S.sel.has(id) ? S.sel.delete(id) : S.sel.add(id); render(); }
-function render(){ renderStats(); renderChart(); renderTable(); }
+function render(){ renderStats(); renderChart(); renderTable(); renderTP(); }
 
 /* ========================================================== live feed ==== */
 const qp = new URLSearchParams(location.search);
@@ -1112,12 +1283,49 @@ async function pull(ticker){
   return null;
 }
 
+/* Preferred path: a same-origin prices.json written by the bundled GitHub Action.
+   No cross-origin request, so no CORS, no relay, no rate limit. */
+async function pullLocal(){
+  try{
+    const ctl = new AbortController();
+    const to = setTimeout(()=>ctl.abort(), 8000);
+    const r = await fetch("prices.json?t=" + encodeURIComponent(SNAPSHOT), { signal: ctl.signal, cache:"no-store" });
+    clearTimeout(to);
+    if(!r.ok) return null;
+    const j = await r.json();
+    if(!j || !j.quotes) return null;
+    let n = 0;
+    DATA.forEach(c=>{
+      const q = j.quotes[c.tic];
+      if(q && typeof q.px === "number"){
+        c.px = q.px; c.prev = q.prev; c.hist = q.hist||[]; c.ts = q.ts||[]; c.live = true; n++;
+      }
+    });
+    if(j.fx && j.fx.EURNOK > 0) FX.EURNOK = j.fx.EURNOK;
+    return n ? { n, updated: j.updated } : null;
+  }catch(e){ return null; }
+}
+
 async function refresh(){
   const btn = $("#refresh");
   if (btn.disabled) return;
   btn.disabled = true; btn.textContent = "↻ Refreshing…";
   setStatus("live","Fetching live prices…");
   $("#chart").style.opacity = .55; $("#tbody").style.opacity = .55;
+
+  const local = await pullLocal();
+  if (local){
+    $("#chart").style.opacity = 1; $("#tbody").style.opacity = 1;
+    btn.disabled = false; btn.textContent = "↻ Refresh prices";
+    S.live = true;
+    const d = local.updated ? new Date(local.updated) : null;
+    setStatus("ok", "Live · " + (d && !isNaN(d)
+      ? d.toLocaleDateString("en-GB",{day:"2-digit",month:"short"}) + " " + d.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})
+      : "prices.json") + ` · ${local.n} tickers`);
+    $("#status").title = "Prices from the repo's own prices.json, refreshed by the scheduled GitHub Action. No third-party relay involved.";
+    render();
+    return;
+  }
 
   const jobs = [...DATA.map(c=>({c, tic:c.tic})), {c:null, tic:"EURNOK=X"}];
   let ok = 0, fail = 0;
@@ -1154,7 +1362,7 @@ function setStatus(kind, text){
   $("#statusdot").className = "dot " + kind;
   $("#statustxt").textContent = text;
   $("#status").title = kind === "err"
-    ? "Public CORS relays are unreachable or rate-limited. Figures below are the 29-Jul-2026 snapshot. See the footer for a permanent relay you can deploy."
+    ? "No prices.json in the repo and the public CORS relays are unreachable. Figures below are the 29-Jul-2026 snapshot. Enable the bundled GitHub Action for a permanent fix."
     : kind === "warn" ? "Some tickers did not return; those rows still show snapshot prices."
     : "Prices and 1-year history pulled from Yahoo Finance. Fundamentals remain at the snapshot date.";
 }
@@ -1180,7 +1388,6 @@ $("#adj").addEventListener("change", e=>{ S.adj = e.target.checked; render(); })
 $("#selall").addEventListener("click", ()=>{ visible().forEach(c=>S.sel.add(c.id)); render(); });
 $("#selnone").addEventListener("click", ()=>{ S.sel.clear(); render(); });
 $("#selcore").addEventListener("click", ()=>{ S.sel = new Set(CORE6); render(); });
-$("#ebitdaIn").addEventListener("input", ()=>renderStats());
 $("#refresh").addEventListener("click", refresh);
 $("#theme").addEventListener("click", ()=>{
   const r = document.documentElement;
@@ -1189,7 +1396,7 @@ $("#theme").addEventListener("click", ()=>{
 });
 $("#modal").addEventListener("click", e=>{ if(e.target.id === "modal") closeCard(); });
 document.addEventListener("keydown", e=>{ if(e.key === "Escape") closeCard(); });
-addEventListener("resize", ()=>renderChart());
+addEventListener("resize", ()=>{ renderChart(); renderTP(); });
 
 setStatus("", `Snapshot ${SNAPSHOT}`);
 render();

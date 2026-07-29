@@ -1,0 +1,35 @@
+name: Refresh prices
+
+on:
+  schedule:
+    - cron: "0 6 * * 1-5"      # 06:00 UTC, weekdays. Change to "0 6 * * 1" for weekly.
+  workflow_dispatch:           # also lets you run it by hand from the Actions tab
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-prices
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Fetch quotes
+        run: node scripts/fetch-prices.mjs
+
+      - name: Commit prices.json if it changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add prices.json
+          git diff --staged --quiet && echo "no change" && exit 0
+          git commit -m "chore: refresh prices"
+          git push
