@@ -1,4 +1,4 @@
-// « Save this file in your repo as scripts/fetch-prices.mjs »
+// scripts/fetch-prices.mjs
 //
 // Pulls quotes + 1 year of daily closes from the Yahoo Finance chart API and
 // writes prices.json next to index.html. Runs on GitHub's servers, so there is
@@ -45,9 +45,11 @@ async function pull(ticker, attempt = 1) {
       if (typeof v === "number" && Number.isFinite(v)) { hist.push(Math.round(v * 1e4) / 1e4); ts.push(stamps[i]); }
     });
 
+    // NOTE: meta.chartPreviousClose on a 1y range is the close BEFORE the range
+    // starts — i.e. a year ago, not yesterday. Use the prior daily close instead.
     return {
       px: r.meta.regularMarketPrice,
-      prev: r.meta.chartPreviousClose ?? null,
+      prev: hist.length > 1 ? hist[hist.length - 2] : (r.meta.chartPreviousClose ?? null),
       ccy: r.meta.currency ?? null,
       hist,
       ts,
