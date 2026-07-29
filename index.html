@@ -1,0 +1,1199 @@
+<!DOCTYPE html>
+<!--
+  EUROPEAN RENEWABLES / IPP TRADING COMPARABLES — exit-multiple dashboard
+  Snapshot 29 July 2026.
+
+  DEPLOY TO GITHUB PAGES
+    1. Drop this file into the repo root (or /docs) as index.html
+    2. Settings -> Pages -> Source: Deploy from a branch -> main / root
+    3. Done. Single file, no build step, no dependencies.
+
+  LIVE PRICES
+    The Refresh button pulls quotes + 1y history from the Yahoo Finance chart API
+    through a public CORS relay, and recomputes market cap, EV and every multiple.
+    If the relays are down the page falls back to the embedded snapshot silently.
+    To use your own relay:  index.html?proxy=https://your-worker.workers.dev/?url={url}
+    (a six-line Cloudflare Worker is in the footer of the page).
+
+  UPDATING FUNDAMENTALS
+    EBITDA, net debt and share counts are in the DATA array near the top of the
+    <script> block, one object per company. Re-cut them after each results season.
+-->
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>European Renewables / IPP Comparables — Exit Multiple Dashboard</title>
+<style>
+:root{
+  --bg:#0d0d0d; --surface:#1a1a19; --surface2:#222221; --surface3:#2a2a28;
+  --ink:#ffffff; --ink2:#c3c2b7; --muted:#898781;
+  --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,.10);
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70;
+  --good:#0ca30c; --crit:#d03b3b; --warn:#fab219;
+  --sel:rgba(57,135,229,.14);
+  color-scheme:dark;
+}
+:root[data-theme="light"]{
+  --bg:#f9f9f7; --surface:#fcfcfb; --surface2:#f2f2ef; --surface3:#e8e7e2;
+  --ink:#0b0b0b; --ink2:#52514e; --muted:#898781;
+  --grid:#e1e0d9; --axis:#c3c2b7; --border:rgba(11,11,11,.10);
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a;
+  --good:#006300; --crit:#d03b3b; --warn:#b07800;
+  --sel:rgba(42,120,214,.10);
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--ink);
+  font-family:system-ui,-apple-system,"Segoe UI",sans-serif;
+  font-size:13px; line-height:1.45; -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1560px;margin:0 auto;padding:16px 20px 60px}
+
+/* ---------- header ---------- */
+header{display:flex;align-items:flex-start;gap:16px;flex-wrap:wrap;
+  padding-bottom:14px;margin-bottom:16px;border-bottom:1px solid var(--border)}
+h1{font-size:17px;font-weight:650;margin:0;letter-spacing:-.01em}
+.sub{color:var(--muted);font-size:11.5px;margin-top:3px}
+.spacer{flex:1}
+.hbtns{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+button,.btn{font-family:inherit;font-size:12px;color:var(--ink);
+  background:var(--surface2);border:1px solid var(--border);border-radius:6px;
+  padding:6px 11px;cursor:pointer;transition:background .12s,border-color .12s}
+button:hover,.btn:hover{background:var(--surface3)}
+button:focus-visible{outline:2px solid var(--s1);outline-offset:1px}
+button.primary{background:var(--s1);border-color:transparent;color:#fff;font-weight:600}
+button.primary:hover{filter:brightness(1.08)}
+button.primary[disabled]{opacity:.55;cursor:default;filter:none}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:11px;
+  padding:4px 9px;border-radius:999px;border:1px solid var(--border);
+  background:var(--surface2);color:var(--ink2);white-space:nowrap}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--muted);flex:none}
+.dot.ok{background:var(--good)} .dot.warn{background:var(--warn)} .dot.err{background:var(--crit)}
+.dot.live{background:var(--good);animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+/* ---------- controls ---------- */
+.controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+.grp{display:flex;gap:6px;align-items:center;background:var(--surface);
+  border:1px solid var(--border);border-radius:8px;padding:5px 8px}
+.grp .lab{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin-right:2px}
+.chip{font-size:11.5px;padding:4px 10px;border-radius:5px;border:1px solid transparent;
+  background:transparent;color:var(--ink2);cursor:pointer}
+.chip:hover{background:var(--surface3)}
+.chip[aria-pressed="true"]{background:var(--surface3);color:var(--ink);
+  border-color:var(--border);font-weight:600}
+.seg{display:flex;background:var(--surface2);border-radius:6px;padding:2px;gap:2px}
+.seg button{background:transparent;border:none;padding:5px 10px;font-size:11.5px;
+  border-radius:4px;color:var(--ink2)}
+.seg button[aria-pressed="true"]{background:var(--s1);color:#fff;font-weight:600}
+label.sw{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--ink2);cursor:pointer;
+  user-select:none}
+label.sw input{accent-color:var(--s1);width:14px;height:14px;cursor:pointer}
+
+/* ---------- stat strip ---------- */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:10px;margin-bottom:14px}
+.tile{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:11px 13px}
+.tile .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}
+.tile .v{font-size:25px;font-weight:600;letter-spacing:-.02em;margin-top:3px;line-height:1.1}
+.tile .v small{font-size:14px;font-weight:500;color:var(--ink2)}
+.tile .n{font-size:11px;color:var(--muted);margin-top:2px}
+.tile.accent{border-color:color-mix(in srgb,var(--s1) 45%,transparent)}
+.tile.accent .v{color:var(--s1)}
+
+/* ---------- cards ---------- */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;
+  padding:14px 16px;margin-bottom:14px}
+.card h2{font-size:12.5px;font-weight:650;margin:0 0 2px;letter-spacing:-.005em}
+.card .note{font-size:11px;color:var(--muted);margin:0 0 12px}
+.cardhead{display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap}
+.cardhead .spacer{flex:1}
+
+/* ---------- implied value ---------- */
+.implied{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+.implied input[type=number]{width:96px;font-family:inherit;font-size:14px;font-weight:600;
+  background:var(--surface2);color:var(--ink);border:1px solid var(--border);
+  border-radius:6px;padding:6px 9px;text-align:right}
+.implied input:focus{outline:2px solid var(--s1);outline-offset:1px}
+.iv{display:flex;flex-direction:column;gap:1px}
+.iv .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}
+.iv .v{font-size:19px;font-weight:600;letter-spacing:-.015em}
+
+/* ---------- chart ---------- */
+.chartwrap{width:100%;overflow:visible}
+svg{display:block;max-width:100%}
+svg text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+.bar{cursor:pointer}
+.bar:focus-visible{outline:2px solid var(--s1);outline-offset:2px}
+.axlab{font-size:10.5px;fill:var(--muted);font-variant-numeric:tabular-nums}
+.barlab{font-size:11px;fill:var(--ink2)}
+.barlab.on{fill:var(--ink);font-weight:600}
+.barval{font-size:11px;fill:var(--ink);font-variant-numeric:tabular-nums;font-weight:600}
+.barval.off{fill:var(--muted);font-weight:500}
+.reflab{font-size:10.5px;font-weight:600;font-variant-numeric:tabular-nums}
+
+/* ---------- table ---------- */
+.tablewrap{overflow-x:auto;margin:0 -16px;padding:0 16px}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;font-size:12px}
+thead th{position:sticky;top:0;background:var(--surface);z-index:2;
+  text-align:right;font-weight:600;font-size:10.5px;text-transform:uppercase;
+  letter-spacing:.05em;color:var(--muted);padding:7px 8px;white-space:nowrap;
+  border-bottom:1px solid var(--axis);cursor:pointer;user-select:none}
+thead th:hover{color:var(--ink)}
+thead th.l{text-align:left}
+thead th .ar{opacity:.5;font-size:9px}
+tbody td{padding:7px 8px;text-align:right;border-bottom:1px solid var(--grid);white-space:nowrap}
+tbody td.l{text-align:left}
+tbody tr{cursor:pointer}
+tbody tr:hover{background:var(--surface2)}
+tbody tr.on{background:var(--sel)}
+tbody tr.on:hover{background:color-mix(in srgb,var(--sel) 70%,var(--surface3))}
+tbody tr.on td.nm{box-shadow:inset 3px 0 0 var(--s1)}
+td.nm{font-weight:600;color:var(--ink)}
+td.nm .tic{color:var(--muted);font-weight:500;font-size:11px;margin-left:6px}
+.chk{width:14px;height:14px;accent-color:var(--s1);cursor:pointer;vertical-align:-2px}
+.tag{display:inline-block;font-size:9.5px;letter-spacing:.04em;text-transform:uppercase;
+  padding:2px 6px;border-radius:4px;border:1px solid var(--border);color:var(--ink2);
+  background:var(--surface2);white-space:nowrap}
+.up{color:var(--good)} .dn{color:var(--crit)}
+.na{color:var(--muted)}
+.flag{color:var(--warn);font-size:11px;margin-left:4px;cursor:help}
+.zoom{background:none;border:none;color:var(--muted);font-size:13px;padding:2px 5px;
+  border-radius:4px;cursor:pointer;line-height:1}
+.zoom:hover{background:var(--surface3);color:var(--ink)}
+tfoot td{padding-top:9px;font-size:11px;color:var(--muted);border:none}
+
+/* sparkline cell */
+.spk{width:66px;height:20px;display:block}
+
+/* ---------- tooltip ---------- */
+#tip{position:fixed;z-index:60;pointer-events:none;opacity:0;transition:opacity .1s;
+  background:var(--surface);border:1px solid var(--border);border-radius:9px;
+  box-shadow:0 8px 28px rgba(0,0,0,.45);padding:11px 13px;max-width:330px;font-size:11.5px}
+:root[data-theme="light"] #tip{box-shadow:0 8px 28px rgba(0,0,0,.15)}
+#tip.on{opacity:1}
+#tip .t{font-weight:650;font-size:12.5px;margin-bottom:6px}
+#tip .r{display:flex;justify-content:space-between;gap:16px;padding:1.5px 0}
+#tip .r span:first-child{color:var(--muted)}
+#tip .r span:last-child{font-variant-numeric:tabular-nums;font-weight:600}
+#tip .d{color:var(--ink2);margin-top:7px;padding-top:7px;border-top:1px solid var(--grid);line-height:1.4}
+#tip .hint{color:var(--muted);margin-top:6px;font-size:10.5px;font-style:italic}
+
+/* ---------- modal ---------- */
+#modal{position:fixed;inset:0;z-index:80;display:none;background:rgba(0,0,0,.62);
+  padding:28px 20px;overflow:auto}
+:root[data-theme="light"] #modal{background:rgba(20,20,20,.35)}
+#modal.on{display:block}
+.sheet{max-width:960px;margin:0 auto;background:var(--surface);border:1px solid var(--border);
+  border-radius:12px;box-shadow:0 24px 60px rgba(0,0,0,.5);overflow:hidden}
+.sheethead{display:flex;align-items:flex-start;gap:14px;padding:16px 20px;
+  border-bottom:1px solid var(--border);flex-wrap:wrap}
+.sheethead h3{margin:0;font-size:17px;font-weight:650;letter-spacing:-.015em}
+.sheethead .m{color:var(--muted);font-size:11.5px;margin-top:3px}
+.sheetbody{padding:18px 20px 22px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:18px}
+.kpi{background:var(--surface2);border-radius:8px;padding:9px 11px}
+.kpi .k{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.kpi .v{font-size:18px;font-weight:600;margin-top:2px;letter-spacing:-.015em}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:22px}
+@media(max-width:820px){.cols{grid-template-columns:1fr}}
+.sec{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);
+  margin:0 0 8px;font-weight:600}
+.dl{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:12px}
+.dl dt{color:var(--muted)}
+.dl dd{margin:0;text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+ul.flags{margin:0;padding:0;list-style:none;font-size:11.5px;color:var(--ink2)}
+ul.flags li{padding:5px 0 5px 16px;position:relative;border-bottom:1px solid var(--grid);line-height:1.4}
+ul.flags li:last-child{border-bottom:none}
+ul.flags li:before{content:"⚑";position:absolute;left:0;top:5px;color:var(--warn);font-size:10px}
+a.web{color:var(--s1);text-decoration:none;font-weight:600}
+a.web:hover{text-decoration:underline}
+.close{margin-left:auto}
+.pxchart{position:relative}
+.pxempty{display:flex;align-items:center;justify-content:center;height:190px;
+  color:var(--muted);font-size:12px;text-align:center;background:var(--surface2);border-radius:8px;padding:16px}
+
+/* ---------- footer ---------- */
+footer{margin-top:22px;padding-top:16px;border-top:1px solid var(--border);
+  color:var(--muted);font-size:11px;line-height:1.6}
+footer h4{color:var(--ink2);font-size:11px;margin:14px 0 5px;text-transform:uppercase;letter-spacing:.06em}
+footer code{background:var(--surface2);padding:1px 5px;border-radius:4px;font-size:10.5px}
+footer a{color:var(--muted)}
+details summary{cursor:pointer;color:var(--ink2);padding:3px 0}
+pre{background:var(--surface2);border:1px solid var(--border);border-radius:7px;
+  padding:10px 12px;overflow:auto;font-size:10.5px;line-height:1.5;color:var(--ink2)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div>
+    <h1>European Renewables &amp; IPP — Trading Comparables</h1>
+    <div class="sub">Select names to build a peer set · median &amp; mean EV/EBITDA update live · double-click a row for the full card</div>
+  </div>
+  <div class="spacer"></div>
+  <div class="hbtns">
+    <span class="pill" id="status"><span class="dot" id="statusdot"></span><span id="statustxt">Snapshot 29-Jul-2026</span></span>
+    <button id="refresh" class="primary">↻ Refresh prices</button>
+    <button id="theme" title="Toggle light / dark">◐</button>
+  </div>
+</header>
+
+<div class="controls">
+  <div class="grp">
+    <span class="lab">Peer group</span>
+    <button class="chip" data-bucket="iberia" aria-pressed="true">Iberian pure-play</button>
+    <button class="chip" data-bucket="euipp" aria-pressed="true">European IPP</button>
+    <button class="chip" data-bucket="util" aria-pressed="true">Utility anchor</button>
+  </div>
+  <div class="grp">
+    <span class="lab">Multiple</span>
+    <div class="seg" id="metricseg">
+      <button data-metric="evL" aria-pressed="false">EV/EBITDA LTM</button>
+      <button data-metric="ev26" aria-pressed="true">EV/EBITDA 26E</button>
+      <button data-metric="ev27" aria-pressed="false">EV/EBITDA 27E</button>
+      <button data-metric="lev" aria-pressed="false">Net debt/EBITDA</button>
+    </div>
+  </div>
+  <div class="grp">
+    <label class="sw" title="Strips one-off asset-rotation gains and disposal profits out of LTM EBITDA for Acciona Energía, Solaria, Endesa and EDPR. Forward estimates are left on a consensus basis.">
+      <input type="checkbox" id="adj"> Adjust LTM for one-offs
+    </label>
+  </div>
+  <div class="grp">
+    <button class="chip" id="selall">Select all</button>
+    <button class="chip" id="selnone">Clear</button>
+    <button class="chip" id="selcore">Core 6</button>
+  </div>
+</div>
+
+<div class="stats" id="stats"></div>
+
+<div class="card">
+  <div class="cardhead">
+    <div>
+      <h2 id="charttitle">EV / EBITDA 2026E</h2>
+      <p class="note" id="chartnote">Selected names in blue · click any bar to add or remove it from the peer set</p>
+    </div>
+  </div>
+  <div class="chartwrap" id="chart"></div>
+</div>
+
+<div class="card">
+  <div class="cardhead">
+    <div>
+      <h2>Comparables</h2>
+      <p class="note">Click a row to toggle it into the peer set · double-click (or ⤢) to open the full company card · click a column header to sort</p>
+    </div>
+  </div>
+  <div class="tablewrap">
+    <table id="tbl">
+      <thead><tr id="thead"></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <div class="cardhead">
+    <div>
+      <h2>Implied platform value</h2>
+      <p class="note">Applies the peer-set multiple above to your own 2030 EBITDA. Enterprise value basis — deduct net debt at exit for equity value.</p>
+    </div>
+  </div>
+  <div class="implied">
+    <div class="iv">
+      <span class="k">Platform 2030E EBITDA (€m)</span>
+      <input type="number" id="ebitdaIn" value="100" min="0" step="5" aria-label="Platform 2030 EBITDA in EUR millions">
+    </div>
+    <div class="iv"><span class="k">At peer median</span><span class="v" id="ivMed">—</span></div>
+    <div class="iv"><span class="k">At peer mean</span><span class="v" id="ivAvg">—</span></div>
+    <div class="iv"><span class="k">Peer range (min–max)</span><span class="v" id="ivRng">—</span></div>
+  </div>
+</div>
+
+<footer>
+  <div><strong style="color:var(--ink2)">Snapshot as at 29 July 2026.</strong> Fundamentals (EBITDA, net debt, share counts) are from the most recent company filing for each name — dates are shown in the Net debt column and on each company card. Consensus estimates are sell-side aggregates (MarketScreener / company-collected consensus), or company guidance where flagged. Prices update via the Refresh button; fundamentals do not, and should be re-cut after each results season.</div>
+
+  <h4>How the multiples are built</h4>
+  <div>Market cap = live price × shares outstanding (ex-treasury where disclosed). EV = market cap + last reported net financial debt. Forward multiples apply <em>current</em> EV to forward EBITDA — the market convention — so they do not credit forecast deleveraging. Hybrids, minority interests and US tax-equity balances are <em>not</em> added to EV; where they are material the row carries a ⚑ and the company card spells out the amount. Median and mean are computed across the selected names only, ignoring any name where that metric is unavailable.</div>
+
+  <h4>Known comparability issues (read before quoting a median)</h4>
+  <div>Several names book asset-rotation gains inside EBITDA — Acciona Energía (€614m of FY25 EBITDA), Solaria (€37m one-off gain in LTM), Energiekontor (development disposals) and Grenergy (whose LTM is conversely <em>depressed</em> because no rotation closed in Q1-26). The "Adjust LTM for one-offs" switch removes what can be quantified. Scatec consolidates partly-owned emerging-market SPVs, so its consolidated EV/EBITDA is not like-for-like. Enel consolidates 70.1% of Endesa — holding both in one peer set double-counts. EDPR's net debt is ~92% intercompany parent funding and excludes ~€2.9bn of tax equity.</div>
+
+  <h4>Live price refresh</h4>
+  <div>The Refresh button pulls quotes and 1-year price history from the Yahoo Finance chart API through a public CORS relay, then recomputes market cap, EV and every multiple. It tries several relays in turn; if all of them are down or rate-limited the dashboard silently keeps the snapshot and the status pill turns amber — nothing breaks. Public relays are best-effort. For a permanent fix, deploy the six-line Cloudflare Worker below and load the page with <code>?proxy=https://your-worker.workers.dev/?url={url}</code>.</div>
+
+  <details style="margin-top:8px">
+    <summary>Cloudflare Worker relay (free tier, ~2 minutes to deploy)</summary>
+    <pre>export default {
+  async fetch(req) {
+    const target = new URL(req.url).searchParams.get("url");
+    if (!target) return new Response("missing url", { status: 400 });
+    const r = await fetch(target, { headers: { "User-Agent": "Mozilla/5.0" } });
+    return new Response(r.body, {
+      status: r.status,
+      headers: { "content-type": "application/json",
+                 "access-control-allow-origin": "*" }
+    });
+  }
+}</pre>
+  </details>
+
+  <h4>Sources</h4>
+  <div style="margin-top:4px">Company results reports, presentations and IR pages:
+    <a href="https://grenergy.eu/investors/" target="_blank" rel="noopener">Grenergy</a> ·
+    <a href="https://www.acciona-energia.com/shareholders-investors/" target="_blank" rel="noopener">Acciona Energía</a> ·
+    <a href="https://solariaenergia.com/en/investors/" target="_blank" rel="noopener">Solaria</a> ·
+    <a href="https://www.edpr-investors.com/" target="_blank" rel="noopener">EDP Renováveis</a> ·
+    <a href="https://www.ecoener.es/accionistas-e-inversores/" target="_blank" rel="noopener">Ecoener</a> ·
+    <a href="https://www.voltalia.com/investor-relations/" target="_blank" rel="noopener">Voltalia</a> ·
+    <a href="https://www.erg.eu/en/investor-relations/" target="_blank" rel="noopener">ERG</a> ·
+    <a href="https://www.scatec.com/investor/" target="_blank" rel="noopener">Scatec</a> ·
+    <a href="https://www.energiekontor.de/en/investor-relations.html" target="_blank" rel="noopener">Energiekontor</a> ·
+    <a href="https://www.iberdrola.com/shareholders-investors" target="_blank" rel="noopener">Iberdrola</a> ·
+    <a href="https://www.endesa.com/en/shareholders-and-investors" target="_blank" rel="noopener">Endesa</a> ·
+    <a href="https://www.enel.com/investors" target="_blank" rel="noopener">Enel</a>.
+    Consensus estimates via <a href="https://www.marketscreener.com/" target="_blank" rel="noopener">MarketScreener</a> and company-published analyst consensus. Prices via <a href="https://finance.yahoo.com/" target="_blank" rel="noopener">Yahoo Finance</a>.
+  </div>
+
+  <div style="margin-top:12px;font-size:10.5px">Prepared for internal discussion purposes. Not investment advice, not a valuation opinion, and not a substitute for a fairness opinion or diligence. Figures compiled from public sources and carry the errors of those sources.</div>
+</footer>
+
+</div><!-- /wrap -->
+
+<div id="tip" role="tooltip"></div>
+
+<div id="modal" role="dialog" aria-modal="true" aria-labelledby="mtitle">
+  <div class="sheet" id="sheet"></div>
+</div>
+
+<script>
+/* ============================================================================
+   EUROPEAN RENEWABLES / IPP COMPARABLES
+   Snapshot: 29 July 2026. Fundamentals from latest company filings; forward
+   figures are sell-side consensus unless a flag says otherwise.
+   Money in EUR millions unless noted. Prices in the company's own currency.
+   ========================================================================== */
+
+const SNAPSHOT = "29-Jul-2026";
+const FX = { EURNOK: 10.99 };   /* refreshed live alongside prices */
+
+const BUCKETS = {
+  iberia: "Iberian pure-play",
+  euipp:  "European IPP",
+  util:   "Utility anchor"
+};
+
+const DATA = [
+/* ---------------------------------------------------------------- Iberia -- */
+{
+  id:"GRE", tic:"GRE.MC", name:"Grenergy Renovables", ccy:"EUR", bucket:"iberia",
+  country:"Spain", web:"https://grenergy.eu",
+  px:89.40, pxDate:"29-Jul-26", sh:28.11,
+  nd:1160, ndDate:"31-Mar-26",
+  revL:976, ebL:144, ebLadj:null, ebLbasis:"LTM to 31-Mar-26",
+  rev26:823.7, eb26:231.3, eb27:363.2, estSrc:"MarketScreener consensus, 12 analysts",
+  mw:2200, mwNote:"operating & under construction",
+  cap:"2.2 GW PV + 8.6 GWh BESS (operating & under construction)",
+  pipe:"12 GW + 71 GWh total platform",
+  tp:131.15, nAn:12, rat:"Buy",
+  desc:"Vertically integrated solar PV and battery developer and IPP. Build-and-rotate model: a large share of EBITDA is development, construction and asset-sale gains rather than stabilised generation. Core markets Chile (Oasis de Atacama) and Spain.",
+  flags:[
+    "LTM EBITDA of €144m is trough-distorted — no asset rotation closed in Q1-26, whereas Q1-25 carried €55m of gains. The LTM multiple is not meaningful; use 2026E/2027E.",
+    "~74% of net debt is non-recourse project finance. Corporate net debt was €257m at FY25 and corporate leverage 2.5x at Q1-26, against 8.1x total.",
+    "Disclosed private-market marks: Chilean hybrid PV+BESS sold to CVC DIF at 1.8x EV / invested capital; a 297 MW Spanish PV rotation at ~€0.92m/MW.",
+    "50.01% held by Daruan Group Holding."
+  ]
+},
+{
+  id:"ANE", tic:"ANE.MC", name:"Acciona Energía", ccy:"EUR", bucket:"iberia",
+  country:"Spain", web:"https://www.acciona-energia.com",
+  px:21.80, pxDate:"29-Jul-26", sh:324.61,
+  nd:4161, ndDate:"31-Dec-25",
+  revL:2925, ebL:1546, ebLadj:932, ebLbasis:"FY2025 — Q1 is a trading statement only",
+  rev26:2803, eb26:1185, eb27:1122, estSrc:"MarketScreener consensus, 21 analysts; company guides ~€1,200m for 2026",
+  mw:14795, mwNote:"total installed, incl. non-consolidated",
+  cap:"14,795 MW total (13,073 MW consolidated) · 68% wind, 29% solar",
+  pipe:"1.3 GW secured for 2026-27; ~0.7 GW net additions p.a.",
+  tp:23.22, nAn:21, rat:"Hold",
+  desc:"Largest listed European renewables pure-play by installed capacity. Predominantly onshore wind plus solar, with emerging BESS, across 22 countries. Asset rotation is now a structural earnings line.",
+  flags:[
+    "FY25 EBITDA of €1,546m includes €614m of asset-rotation gains. Underlying operations EBITDA was €932m — leverage on that basis is 4.5x, not the reported 2.7x.",
+    "Only 5% of debt is non-recourse: a corporate investment-grade balance sheet (Fitch BBB−, outlook Negative), unlike most peers here.",
+    "91.1% owned by Acciona S.A.; free float 8.9%. Delisting speculation in mid-2026 was publicly ruled out by the chairman at the June AGM.",
+    "2026 guidance: EBITDA ~€1,200m and net debt below €3,000m after ~€1.1bn of rotation proceeds.",
+    "2024-25 rotations were done at ~€1.2m/MW across 2.6 GW."
+  ]
+},
+{
+  id:"SLR", tic:"SLR.MC", name:"Solaria Energía", ccy:"EUR", bucket:"iberia",
+  country:"Spain", web:"https://solariaenergia.com",
+  px:16.75, pxDate:"29-Jul-26", sh:128.92,
+  nd:1517, ndDate:"31-Mar-26",
+  revL:342.8, ebL:305.4, ebLadj:268.4, ebLbasis:"LTM to 31-Mar-26",
+  rev26:392.3, eb26:339.0, eb27:428.4, estSrc:"MarketScreener consensus, 15 analysts; company guides €331m for 2026",
+  mw:3063, mwNote:"operating",
+  cap:"3,063 MW solar operating + 116 MWh BESS · 1.2 GW + 1,200 MWh under construction",
+  pipe:"14.3 GW connected targeted by 2028; 3.4 GW European data-centre portfolio",
+  tp:23.45, nAn:15, rat:"Outperform",
+  desc:"Pure-play Spanish solar PV IPP that self-develops, self-builds and owns; ~97% Spain. Adding co-located batteries and pivoting into powered-land and data-centre grid capacity.",
+  flags:[
+    "Net debt predates the April-2026 equity raise (€300m at €24.00/share, 6.7x covered). Pro-forma net debt is ~€1,217m, which lowers EV/EBITDA by roughly 1.0x.",
+    "LTM EBITDA includes a €37m one-off gain on the sale of 50% of Gravyx plus €49.6m of third-party infrastructure services — the generation run-rate is materially lower.",
+    "84% of debt is non-recourse project finance at an average 3.7% cost and ~12-year residual tenor.",
+    "Q1-26: capacity up 85% year on year but energy sales up only 17%, as the captured price fell ~20% to €47/MWh.",
+    "The shares trade ~30% below the April placement price."
+  ]
+},
+{
+  id:"EDPR", tic:"EDPR.LS", name:"EDP Renováveis", ccy:"EUR", bucket:"iberia",
+  country:"Spain / Portugal", web:"https://www.edpr.com",
+  px:13.34, pxDate:"29-Jul-26", sh:1060,
+  nd:8682, ndDate:"30-Jun-26",
+  revL:2672, ebL:2056, ebLadj:2047, ebLbasis:"LTM to 30-Jun-26",
+  rev26:2820, eb26:2089, eb27:2161, estSrc:"Company-published consensus, 19 analysts",
+  mw:20503, mwNote:"operating",
+  cap:"20,503 MW operating · 1,908 MW under construction",
+  pipe:">35 GW development pipeline; Ocean Winds 21.4 GW gross offshore",
+  tp:14.73, nAn:23, rat:"Outperform",
+  desc:"Global pure-play renewables IPP, ~72% owned by EDP. Onshore wind 64%, utility solar 24%, offshore through the Ocean Winds JV with ENGIE. North America is ~49% of capacity.",
+  flags:[
+    "~92% of gross debt is intercompany funding from EDP (€8.4bn of €9.2bn) — a parent funding line, not market-priced project finance.",
+    "~€2.9bn of US tax-equity balances sit outside net debt while the related income sits inside EBITDA. Adding them back pushes the multiple above 12x.",
+    "Minority interests of €1.9bn are excluded from EV here; including them takes 2026E EV/EBITDA from ~10.9x to ~11.9x.",
+    "July-2026 rotation: 80% of a 384 MW California solar + BESS portfolio to Ares at ~$2.08m/MW, ~40% above invested capital. FY25 rotations were done at €1.5–1.7m/MW."
+  ]
+},
+{
+  id:"ENER", tic:"ENER.MC", name:"Ecoener", ccy:"EUR", bucket:"iberia",
+  country:"Spain", web:"https://www.ecoener.es",
+  px:4.07, pxDate:"29-Jul-26", sh:56.95,
+  nd:608, ndDate:"31-Dec-25",
+  revL:84.7, ebL:42.3, ebLadj:null, ebLbasis:"FY2025 — H1-26 due September",
+  rev26:115, eb26:65, eb27:80, estSrc:"Company guidance — Renta 4 is materially above at €72m / €100m",
+  mw:680, mwNote:"operating",
+  cap:"680 MW operating + 135 MW under construction · solar, wind and hydro",
+  pipe:"372 MW ready-to-build for 2026; 806 MW contracted under PPA/CfD",
+  tp:5.67, nAn:null, rat:"Buy",
+  desc:"Small-cap vertically integrated IPP: solar, wind and hydro across Spain (Galicia, Canary Islands) and Latin America, entering Romania and Canada. Adding batteries — 177 MWh in execution.",
+  flags:[
+    "Highest leverage in the set at 14.4x reported. The company's normalised 7.8x strips out assets that carried a full year of debt but only part-year EBITDA after a 253 MW commissioning wave late in 2025.",
+    "Forward figures here are company guidance. Renta 4 sits materially above at €72m for 2026 and €100m for 2027.",
+    "December-2025 rotation: 25% of Cumayasa 4 in the Dominican Republic implied >€1.25m/MW and 1.4x invested capex.",
+    "The June-2026 AGM approved authority to raise capital by up to 50% and issue up to €40m of convertibles — a dilution overhang.",
+    "2025 missed the 1 GW capacity target (delivered 815 MW)."
+  ]
+},
+/* ------------------------------------------------------------- EU IPPs --- */
+{
+  id:"ERG", tic:"ERG.MI", name:"ERG", ccy:"EUR", bucket:"euipp",
+  country:"Italy", web:"https://www.erg.eu",
+  px:21.22, pxDate:"29-Jul-26", sh:145.35,
+  nd:2059, ndDate:"31-Mar-26",
+  revL:784, ebL:564, ebLadj:null, ebLbasis:"LTM to 31-Mar-26, adjusted",
+  rev26:824.5, eb26:574.2, eb27:592.6, estSrc:"MarketScreener consensus; company guides €520–590m for 2026",
+  mw:3985, mwNote:"operating",
+  cap:"3,985 MW · 3,307 wind, 666 solar, 12.5 MW BESS · 8 countries + US",
+  pipe:"~5.0 GW, of which ~700 MW highly visible and 230 MW under construction",
+  tp:23.48, nAn:8, rat:"Hold",
+  desc:"Italian pure renewables IPP — onshore wind led, with a growing solar fleet and a first battery. Corporate-funded with negligible minorities, which makes it the cleanest structural analogue in this set.",
+  flags:[
+    "Structurally the cleanest comparable here: only €58m of project financing, immaterial minorities, no hybrids — a corporate balance sheet over a European wind, solar and BESS asset base.",
+    "62.5% held by San Quirico Renewables, in which IFM Investors holds 49%.",
+    "H1-2026 results were due 31-Jul-2026, two days after this snapshot."
+  ]
+},
+{
+  id:"SCATC", tic:"SCATC.OL", name:"Scatec", ccy:"NOK", fxKey:"EURNOK", bucket:"euipp",
+  country:"Norway", web:"https://www.scatec.com",
+  px:91.60, pxDate:"29-Jul-26", sh:159.85,
+  nd:2386, ndDate:"31-Mar-26",
+  revL:404, ebL:288, ebLadj:null, ebLbasis:"LTM to 31-Mar-26, consolidated",
+  rev26:495, eb26:381, eb27:536, estSrc:"MarketScreener consensus, consolidated basis — low/medium confidence",
+  mw:5356, mwNote:"operating",
+  cap:"5,356 MW · 3,814 solar, 1,174 wind, 368 MW / 1,392 MWh storage",
+  pipe:"12.2 GW near-term portfolio (operating + construction + backlog)",
+  tp:134.78, nAn:8, rat:"Buy",
+  desc:"Emerging-markets, solar-led IPP and developer across 16 countries — South Africa, Egypt, Brazil, the Philippines, Colombia — with a fast-growing battery book and an EPC/O&M arm.",
+  flags:[
+    "The consolidated multiple is not like-for-like: Scatec consolidates 100% of partly-owned SPVs (economic interests run 50–100%) against €183m of minority equity, 17% of the total.",
+    "~74% of gross debt is non-recourse project finance. Corporate net debt is only ~NOK 2.9bn (~€264m), i.e. ~0.8x corporate leverage — the metric management steers to.",
+    "2026 guidance was cut at Q1-26 on FX and Vietnam. The shares sit at a 52-week low, ~47% below the consensus target — an unusually wide gap.",
+    "Euro figures converted at EUR/NOK 10.99; the rate refreshes with the price feed."
+  ]
+},
+{
+  id:"EKT", tic:"EKT.DE", name:"Energiekontor", ccy:"EUR", bucket:"euipp",
+  country:"Germany", web:"https://www.energiekontor.de",
+  px:34.00, pxDate:"29-Jul-26", sh:13.91,
+  nd:549, ndDate:"31-Dec-25",
+  revL:167.9, ebL:86.1, ebLadj:null, ebLbasis:"FY2025 — Q1 is an operational update only",
+  rev26:230.5, eb26:101.8, eb27:148.0, estSrc:"MarketScreener + aktien.guide; 2027E is single-source",
+  mw:448, mwNote:"owned parks",
+  cap:"448 MW owned across 39 wind and solar parks",
+  pipe:"~12.2 GW incl. US rights; 3.1 GW in mature phases",
+  tp:69.36, nAn:5, rat:"Buy",
+  desc:"German wind and solar developer that also retains parks on its own balance sheet, across Germany, the UK, France, Portugal and the USA. Earnings are lumpy — a single park sale moves the year.",
+  flags:[
+    "EBITDA blends development disposal gains with generation. The genuinely comparable piece is the Power Generation segment: €47.4m of FY25 EBITDA on 448 MW.",
+    "Net debt is computed here — the company publishes no net-debt figure. €549m including finance leases, €332m excluding them, i.e. 6.4x versus 3.9x.",
+    "Gross debt nearly doubled during 2025. €142.5m of retail bonds are full-recourse at AG level; bank debt is project-level.",
+    "2027E EBITDA of €148m is single-source and low confidence. The shares trade at less than half the consensus target after a 2025 guidance cut."
+  ]
+},
+{
+  id:"VLTSA", tic:"VLTSA.PA", name:"Voltalia", ccy:"EUR", bucket:"euipp",
+  country:"France", web:"https://www.voltalia.com",
+  px:6.915, pxDate:"29-Jul-26", sh:131.32,
+  nd:2177, ndDate:"31-Dec-25",
+  revL:662.1, ebL:211.3, ebLadj:null, ebLbasis:"FY2025 — H1-26 EBITDA due 3-Sep-26",
+  rev26:605, eb26:223, eb27:312.5, estSrc:"2026E consensus (6 analysts); 2027E is company guidance €300–325m",
+  mw:2962, mwNote:"operating",
+  cap:"2,962 MW operating · 602 MW under construction · 2.0 GW solar, 0.85 GW wind",
+  pipe:"12.0 GW under development, cut 30% under the SPRING plan",
+  tp:10.16, nAn:7, rat:"Buy",
+  desc:"French IPP and services group operating in Brazil, France, the UK, Portugal, Uzbekistan, South Africa and Egypt. Its Renvolt arm operates a further 7.7 GW for third parties.",
+  flags:[
+    "2027E is company guidance (€300–325m), not consensus — no published 2027 sell-side aggregate exists. It implies a ~45% step-up.",
+    "€103m of SPRING restructuring charges sit below EBITDA and drove the €128m FY25 net loss. Some data providers show FY25 EBITDA of €132m on a narrower definition.",
+    "Leverage of 10.3x is among the highest here. A €100m one-year shareholder loan from Creadev (Mar-2026) at E+265bp signalled liquidity pressure.",
+    "€300–350m of disposals targeted by H1-2027 — the key deleveraging catalyst and a future source of €/MW marks."
+  ]
+},
+/* ---------------------------------------------------------- Utilities ---- */
+{
+  id:"IBE", tic:"IBE.MC", name:"Iberdrola", ccy:"EUR", bucket:"util",
+  country:"Spain", web:"https://www.iberdrola.com",
+  px:21.23, pxDate:"27-Jul-26", sh:6673.14,
+  nd:53972, ndDate:"30-Jun-26",
+  revL:45386, ebL:16237, ebLadj:null, ebLbasis:"LTM to 30-Jun-26, adjusted",
+  rev26:45081, eb26:16619, eb27:17472, estSrc:"MarketScreener consensus, 24 analysts",
+  mw:null, mwNote:"n/m — EV includes regulated networks",
+  cap:"56.8 GW total · 46.1 GW renewable (21.0 wind, 12.6 hydro, 8.7 solar, 2.8 offshore, 0.7 GW batteries)",
+  pipe:"€55bn regulated asset base, +11% year on year",
+  tp:19.99, nAn:24, rat:"Outperform",
+  desc:"Grids-led global integrated utility. Networks are 52% of EBITDA on a €55bn regulated asset base across the UK, US, Spain and Brazil, alongside 46 GW of renewables.",
+  flags:[
+    "Not a pure-play: over half of EBITDA is regulated networks, which carry a structurally higher multiple than merchant generation. Treat as an upper bookend, not a like-for-like comparable.",
+    "€9.85bn of perpetual hybrids are equity-accounted and excluded from EV here; including them lifts 2026E EV/EBITDA by roughly 0.6x.",
+    "Trades above the €19.99 consensus target — the most fully valued name in the set.",
+    "Share count moves with scrip dividends; 6,673m as at 24-Jul-2026 after a July capital reduction and bonus issue."
+  ]
+},
+{
+  id:"ELE", tic:"ELE.MC", name:"Endesa", ccy:"EUR", bucket:"util",
+  country:"Spain", web:"https://www.endesa.com",
+  px:41.08, pxDate:"28-Jul-26", sh:1041.74,
+  nd:10300, ndDate:"30-Jun-26",
+  revL:21544, ebL:6296, ebLadj:6096, ebLbasis:"LTM to 30-Jun-26",
+  rev26:21578, eb26:6001, eb27:6077, estSrc:"MarketScreener consensus, 23 analysts — predates the 29-Jul guidance raise",
+  mw:null, mwNote:"n/m — EV includes networks and supply",
+  cap:"22.6 GW total · 11.3 GW renewable · 9.6m power customers",
+  pipe:"€10.6bn 2026-28 capex plan, €5.5bn in distribution networks",
+  tp:34.56, nAn:23, rat:"Underperform",
+  desc:"Iberian integrated utility, 70.1% owned by Enel. Regulated activities crossed ~50% of EBITDA in H1-26; the plan targets ~85% regulated or contracted by 2028.",
+  flags:[
+    "70.1% owned by Enel — holding both Endesa and Enel in one peer set double-counts the same assets.",
+    "~€200m of the €3,240m H1-26 EBITDA was non-recurring, per management.",
+    "Lowest leverage in the set at 1.6x. The €2bn buyback is more than half executed and 2026 guidance was raised to >€2.4bn of ordinary net income on 29-Jul-26.",
+    "Consensus is the most negative in the set: Underperform, target €34.56 against a €41+ share price."
+  ]
+},
+{
+  id:"ENEL", tic:"ENEL.MI", name:"Enel", ccy:"EUR", bucket:"util",
+  country:"Italy", web:"https://www.enel.com",
+  px:10.15, pxDate:"27-Jul-26", sh:10166.68,
+  nd:57830, ndDate:"31-Mar-26",
+  revL:78860, ebL:23082, ebLadj:null, ebLbasis:"LTM to 31-Mar-26, ordinary EBITDA",
+  rev26:82997, eb26:23639, eb27:24565, estSrc:"MarketScreener and company-collected consensus (25 banks) — within 0.1% of each other",
+  mw:null, mwNote:"n/m — EV includes networks and LatAm",
+  cap:"87.0 GW total · 61.9 GW renewable · 69m end users",
+  pipe:"2026 guidance: ordinary EBITDA €23.1–23.6bn",
+  tp:10.23, nAn:23, rat:"Outperform",
+  desc:"Europe's largest utility by capacity — integrated across Italy, Iberia (via 70.1% of Endesa) and Latin America, with 69m end users and 62 GW of renewables.",
+  flags:[
+    "Consolidates Endesa — do not hold both in the same peer set.",
+    "Minority interests are material and not quantified here (29.9% of Endesa plus stakes in Enel Américas and Enel Chile). The ~7x headline is artificially cheap before an NCI adjustment.",
+    "At least €2bn of hybrids outstanding after a January-2026 placement; the total balance was not disclosed in the sources used.",
+    "H1-2026 results were due 30-Jul-2026, the day after this snapshot."
+  ]
+}
+];
+
+const CORE6 = ["GRE","ANE","SLR","EDPR","ERG","VLTSA"];
+
+/* short labels for the chart axis */
+const SHORT = { GRE:"Grenergy", ANE:"Acciona En.", SLR:"Solaria", EDPR:"EDP Renováveis",
+  ENER:"Ecoener", ERG:"ERG", SCATC:"Scatec", EKT:"Energiekontor", VLTSA:"Voltalia",
+  IBE:"Iberdrola", ELE:"Endesa", ENEL:"Enel" };
+
+/* ========================================================== state ======== */
+const S = {
+  sel: new Set(CORE6),
+  buckets: new Set(["iberia","euipp","util"]),
+  metric: "ev26",
+  adj: false,
+  sort: { key:"ev26", dir:1 },
+  live: false,
+  liveAt: null
+};
+
+/* ========================================================== helpers ====== */
+const $ = s => document.querySelector(s);
+const el = (t,c,h)=>{const e=document.createElement(t); if(c)e.className=c; if(h!=null)e.innerHTML=h; return e;};
+const fxOf = c => c.fxKey ? (FX[c.fxKey]||1) : 1;
+const mcap  = c => c.px * c.sh / fxOf(c);
+const ev    = c => mcap(c) + c.nd;
+const ebL   = c => (S.adj && c.ebLadj != null) ? c.ebLadj : c.ebL;
+const evmw  = c => c.mw ? ev(c) / c.mw : null;
+
+function metricVal(c, m){
+  m = m || S.metric;
+  const E = ev(c);
+  if (m === "evL")  return ebL(c) > 0 ? E / ebL(c) : null;
+  if (m === "ev26") return c.eb26  > 0 ? E / c.eb26 : null;
+  if (m === "ev27") return c.eb27  > 0 ? E / c.eb27 : null;
+  if (m === "lev")  return ebL(c) > 0 ? c.nd / ebL(c) : null;
+  return null;
+}
+const METRIC_LABEL = { evL:"EV / EBITDA LTM", ev26:"EV / EBITDA 2026E", ev27:"EV / EBITDA 2027E", lev:"Net debt / EBITDA LTM" };
+
+const nf  = (n,d=0)=> n==null||!isFinite(n) ? "—" : n.toLocaleString("en-GB",{minimumFractionDigits:d,maximumFractionDigits:d});
+const fx1 = n => n==null||!isFinite(n) ? "—" : n.toFixed(1)+"x";
+const fx2 = n => n==null||!isFinite(n) ? "—" : n.toFixed(2);
+const eurm = n => n==null||!isFinite(n) ? "—" : (Math.abs(n)>=10000 ? "€"+nf(n/1000,1)+"bn" : "€"+nf(n)+"m");
+const pctS = n => n==null||!isFinite(n) ? "—" : (n>=0?"+":"")+n.toFixed(2)+"%";
+
+function median(a){ if(!a.length) return null; const s=[...a].sort((x,y)=>x-y); const m=s.length>>1;
+  return s.length%2 ? s[m] : (s[m-1]+s[m])/2; }
+function mean(a){ return a.length ? a.reduce((x,y)=>x+y,0)/a.length : null; }
+
+const visible  = () => DATA.filter(c => S.buckets.has(c.bucket));
+const peerSet  = () => visible().filter(c => S.sel.has(c.id));
+function peerVals(m){ return peerSet().map(c=>metricVal(c,m)).filter(v=>v!=null&&isFinite(v)); }
+
+/* ========================================================== stats ======== */
+function renderStats(){
+  const vals = peerVals();
+  const med = median(vals), avg = mean(vals);
+  const lev = peerSet().map(c=>metricVal(c,"lev")).filter(v=>v!=null&&isFinite(v));
+  const n = peerSet().length, tot = visible().length;
+  const isLev = S.metric === "lev";
+  const unit = v => v==null ? "—" : `${v.toFixed(1)}<small>x</small>`;
+
+  $("#stats").innerHTML = `
+   <div class="tile"><div class="k">Peer set</div><div class="v">${n}<small> / ${tot}</small></div>
+     <div class="n">${n===0?"nothing selected":"names in the median"}</div></div>
+   <div class="tile accent"><div class="k">Median ${isLev?"leverage":"multiple"}</div><div class="v">${unit(med)}</div>
+     <div class="n">${METRIC_LABEL[S.metric]}</div></div>
+   <div class="tile"><div class="k">Mean ${isLev?"leverage":"multiple"}</div><div class="v">${unit(avg)}</div>
+     <div class="n">${vals.length} of ${n} with data</div></div>
+   <div class="tile"><div class="k">Range</div><div class="v" style="font-size:19px">${
+      vals.length ? Math.min(...vals).toFixed(1)+"x – "+Math.max(...vals).toFixed(1)+"x" : "—"}</div>
+     <div class="n">min – max across the set</div></div>
+   <div class="tile"><div class="k">Median leverage</div><div class="v">${unit(median(lev))}</div>
+     <div class="n">net debt / EBITDA${S.adj?", adjusted":""}</div></div>
+   <div class="tile"><div class="k">Aggregate EV</div><div class="v" style="font-size:19px">${
+      n ? eurm(peerSet().reduce((s,c)=>s+ev(c),0)) : "—"}</div>
+     <div class="n">sum of the selected names</div></div>`;
+  renderImplied(med, avg, vals);
+}
+
+function renderImplied(med, avg, vals){
+  const e = parseFloat($("#ebitdaIn").value);
+  const ok = isFinite(e) && e > 0 && S.metric !== "lev";
+  $("#ivMed").textContent = ok && med!=null ? eurm(e*med) : (S.metric==="lev" ? "n/a on leverage" : "—");
+  $("#ivAvg").textContent = ok && avg!=null ? eurm(e*avg) : (S.metric==="lev" ? "n/a on leverage" : "—");
+  $("#ivRng").textContent = ok && vals.length
+      ? eurm(e*Math.min(...vals)) + " – " + eurm(e*Math.max(...vals)) : "—";
+}
+
+/* ========================================================== chart ======== */
+function renderChart(){
+  const rows = visible().slice().sort((a,b)=>{
+    const av=metricVal(a), bv=metricVal(b);
+    if(av==null) return 1; if(bv==null) return -1; return bv-av;
+  });
+  const vals = peerVals();
+  const med = median(vals), avg = mean(vals);
+
+  const W = Math.max(680, ($("#chart").clientWidth||900));
+  const padL = 132, padR = 58, padT = 46, padB = 30, rowH = 27;
+  const H = padT + rows.length*rowH + padB;
+  const maxV = Math.max(...rows.map(r=>metricVal(r)||0), med||0, avg||0) * 1.12 || 1;
+  const x = v => padL + (v/maxV) * (W - padL - padR);
+
+  const ticks = [];
+  const step = maxV > 22 ? 5 : maxV > 11 ? 2.5 : maxV > 5 ? 2 : 1;
+  for (let t = 0; t <= maxV; t += step) ticks.push(t);
+
+  let s = `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" role="img" aria-label="${METRIC_LABEL[S.metric]} by company">`;
+  ticks.forEach(t=>{ s += `<line x1="${x(t).toFixed(1)}" y1="${padT-8}" x2="${x(t).toFixed(1)}" y2="${H-padB+2}" stroke="var(--grid)" stroke-width="1"/>
+      <text class="axlab" x="${x(t).toFixed(1)}" y="${H-padB+16}" text-anchor="middle">${t%1?t.toFixed(1):t}x</text>`; });
+  s += `<line x1="${padL}" y1="${padT-8}" x2="${padL}" y2="${H-padB+2}" stroke="var(--axis)" stroke-width="1"/>`;
+
+  rows.forEach((c,i)=>{
+    const v = metricVal(c);
+    const y = padT + i*rowH;
+    const on = S.sel.has(c.id);
+    const bh = 15, r = 4;
+    const bw = v==null ? 0 : Math.max(x(v)-padL, 0.5);
+    const fill = on ? "var(--s1)" : "var(--muted)";
+    const op = on ? 1 : .42;
+    s += `<g class="bar" tabindex="0" role="button" aria-pressed="${on}" data-id="${c.id}" aria-label="${c.name}, ${v==null?"no data":v.toFixed(1)+" times"}${on?", selected":""}">
+      <rect x="0" y="${y-4}" width="${W}" height="${rowH-2}" fill="transparent"/>
+      <text class="barlab${on?" on":""}" x="${padL-10}" y="${y+bh/2+4}" text-anchor="end">${SHORT[c.id]||c.name}</text>
+      <path d="M${padL} ${y} h${Math.max(bw-r,0)} a${r} ${r} 0 0 1 ${Math.min(r,bw)} ${r} v${bh-2*r} a${r} ${r} 0 0 1 ${-Math.min(r,bw)} ${r} H${padL} z"
+            fill="${fill}" opacity="${op}"/>
+      ${v!=null?`<text class="barval${on?"":" off"}" x="${(padL+bw+7).toFixed(1)}" y="${y+bh/2+4}">${v.toFixed(1)}x</text>`
+               :`<text class="barval off" x="${padL+7}" y="${y+bh/2+4}">n/a</text>`}
+    </g>`;
+  });
+
+  /* median & mean reference lines — labels stagger vertically when they would collide */
+  const close = (med!=null && avg!=null) && Math.abs(x(avg)-x(med)) < 108;
+  const refline = (v,color,label,row)=>{
+    if (v==null) return "";
+    const px = x(v), ly = padT - 30 + row*13;
+    const anchor = px > W-padR-56 ? "end" : px < padL+56 ? "start" : "middle";
+    return `<line x1="${px.toFixed(1)}" y1="${padT-12}" x2="${px.toFixed(1)}" y2="${H-padB+2}" stroke="${color}" stroke-width="2"/>
+      <text class="reflab" x="${px.toFixed(1)}" y="${ly}" text-anchor="${anchor}" fill="${color}">${label} ${v.toFixed(1)}x</text>`;
+  };
+  s += refline(med,"var(--s2)","Median", close ? 0 : 1);
+  if (avg!=null && med!=null && Math.abs(x(avg)-x(med))>1.5) s += refline(avg,"var(--s3)","Mean", 1);
+  s += `</svg>`;
+  $("#chart").innerHTML = s;
+
+  $("#chart").querySelectorAll(".bar").forEach(g=>{
+    g.addEventListener("click", ()=>toggle(g.dataset.id));
+    g.addEventListener("keydown", e=>{ if(e.key===" "||e.key==="Enter"){e.preventDefault();toggle(g.dataset.id);} });
+    g.addEventListener("dblclick", ()=>openCard(g.dataset.id));
+    g.addEventListener("mousemove", e=>showTip(e, DATA.find(d=>d.id===g.dataset.id)));
+    g.addEventListener("mouseleave", hideTip);
+  });
+  $("#charttitle").textContent = METRIC_LABEL[S.metric];
+  $("#chartnote").textContent = S.metric==="lev"
+    ? "Lower is better. Selected names in blue · click any bar to add or remove it from the peer set"
+    : "Selected names in blue · click any bar to add or remove it from the peer set";
+}
+
+/* ========================================================== table ======== */
+const COLS = [
+  {k:"_c",   t:"",              l:true,  s:false},
+  {k:"name", t:"Company",       l:true,  s:true},
+  {k:"_b",   t:"Group",         l:true,  s:true},
+  {k:"px",   t:"Price",         s:true},
+  {k:"_chg", t:"1D",            s:true},
+  {k:"_mc",  t:"Mkt cap",       s:true},
+  {k:"nd",   t:"Net debt",      s:true},
+  {k:"_ev",  t:"EV",            s:true},
+  {k:"_ebL", t:"EBITDA LTM",    s:true},
+  {k:"evL",  t:"EV/EBITDA LTM", s:true},
+  {k:"ev26", t:"EV/EBITDA 26E", s:true},
+  {k:"ev27", t:"EV/EBITDA 27E", s:true},
+  {k:"lev",  t:"ND/EBITDA",     s:true},
+  {k:"_emw", t:"EV/MW",         s:true},
+  {k:"_spk", t:"1Y",            s:false},
+  {k:"_z",   t:"",              s:false}
+];
+function cellSortVal(c,k){
+  switch(k){
+    case "name": return c.name.toLowerCase();
+    case "_b":   return BUCKETS[c.bucket];
+    case "px":   return c.px;
+    case "_chg": return c.prev ? (c.px/c.prev-1) : -Infinity;
+    case "_mc":  return mcap(c);
+    case "nd":   return c.nd;
+    case "_ev":  return ev(c);
+    case "_ebL": return ebL(c);
+    case "_emw": return evmw(c) ?? -Infinity;
+    default:     return metricVal(c,k) ?? Infinity;
+  }
+}
+function renderTable(){
+  $("#thead").innerHTML = COLS.map(c=>{
+    const act = S.sort.key===c.k;
+    return `<th class="${c.l?"l":""}" data-k="${c.k}" ${c.s?'title="Sort"':'style="cursor:default"'}>${c.t}${
+      act?` <span class="ar">${S.sort.dir>0?"▲":"▼"}</span>`:""}</th>`;
+  }).join("");
+
+  const rows = visible().slice().sort((a,b)=>{
+    let av=cellSortVal(a,S.sort.key), bv=cellSortVal(b,S.sort.key);
+    if(typeof av==="string") return av.localeCompare(bv)*S.sort.dir;
+    return (av-bv)*S.sort.dir;
+  });
+
+  $("#tbody").innerHTML = rows.map(c=>{
+    const on = S.sel.has(c.id);
+    const chg = c.prev ? (c.px/c.prev-1)*100 : null;
+    const cur = c.ccy==="NOK" ? "kr" : "€";
+    return `<tr class="${on?"on":""}" data-id="${c.id}">
+      <td class="l"><input class="chk" type="checkbox" ${on?"checked":""} aria-label="Include ${c.name}"></td>
+      <td class="l nm">${c.name}<span class="tic">${c.tic}</span>${c.flags.length?`<span class="flag" title="${c.flags.length} comparability flag${c.flags.length>1?"s":""} — open the card">⚑</span>`:""}</td>
+      <td class="l"><span class="tag">${BUCKETS[c.bucket]}</span></td>
+      <td>${cur}${c.px.toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:c.px<20?3:2})}</td>
+      <td class="${chg==null?"na":chg>=0?"up":"dn"}">${chg==null?"—":pctS(chg)}</td>
+      <td>${eurm(mcap(c))}</td>
+      <td title="as at ${c.ndDate}">${eurm(c.nd)}</td>
+      <td>${eurm(ev(c))}</td>
+      <td title="${c.ebLbasis}">${eurm(ebL(c))}</td>
+      <td>${fx1(metricVal(c,"evL"))}</td>
+      <td>${fx1(metricVal(c,"ev26"))}</td>
+      <td>${fx1(metricVal(c,"ev27"))}</td>
+      <td>${fx1(metricVal(c,"lev"))}</td>
+      <td>${evmw(c)==null?'<span class="na">n/m</span>':fx2(evmw(c))}</td>
+      <td>${spark(c)}</td>
+      <td><button class="zoom" title="Open company card" aria-label="Open ${c.name} card">⤢</button></td>
+    </tr>`;
+  }).join("");
+
+  $("#thead").querySelectorAll("th").forEach(th=>{
+    const col = COLS.find(c=>c.k===th.dataset.k);
+    if(!col||!col.s) return;
+    th.addEventListener("click", ()=>{
+      if(S.sort.key===th.dataset.k) S.sort.dir*=-1; else { S.sort.key=th.dataset.k; S.sort.dir = th.dataset.k==="name"?1:-1; }
+      renderTable();
+    });
+  });
+  $("#tbody").querySelectorAll("tr").forEach(tr=>{
+    const id = tr.dataset.id, c = DATA.find(d=>d.id===id);
+    tr.addEventListener("click", e=>{ if(e.target.closest(".zoom")) { openCard(id); return; } toggle(id); });
+    tr.addEventListener("dblclick", ()=>openCard(id));
+    tr.addEventListener("mousemove", e=>showTip(e,c));
+    tr.addEventListener("mouseleave", hideTip);
+  });
+}
+
+function spark(c){
+  const h = c.hist;
+  if(!h || h.length<4) return '<span class="na" style="font-size:10.5px">—</span>';
+  const step = Math.max(1, Math.floor(h.length/44));
+  const p = h.filter((_,i)=>i%step===0);
+  const mn = Math.min(...p), mx = Math.max(...p), rg = (mx-mn)||1;
+  const W=66,H=20;
+  const pts = p.map((v,i)=>`${(i/(p.length-1)*(W-2)+1).toFixed(1)},${(H-2-((v-mn)/rg)*(H-4)).toFixed(1)}`).join(" ");
+  const up = p[p.length-1] >= p[0];
+  return `<svg class="spk" viewBox="0 0 ${W} ${H}" aria-hidden="true"><polyline points="${pts}" fill="none"
+     stroke="${up?"var(--good)":"var(--crit)"}" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+}
+
+/* ========================================================== tooltip ====== */
+const tip = $("#tip");
+function showTip(e, c){
+  if(!c) return;
+  const chg = c.prev ? (c.px/c.prev-1)*100 : null;
+  const cur = c.ccy==="NOK" ? "kr" : "€";
+  const tpTxt = c.tp ? `${cur}${c.tp.toLocaleString("en-GB",{maximumFractionDigits:2})}${c.nAn?` · ${c.nAn} analysts`:""}` : "—";
+  const up = c.tp ? (c.tp/c.px-1)*100 : null;
+  tip.innerHTML = `<div class="t">${c.name} <span style="color:var(--muted);font-weight:500">${c.tic}</span></div>
+    <div class="r"><span>Market cap</span><span>${eurm(mcap(c))}</span></div>
+    <div class="r"><span>Enterprise value</span><span>${eurm(ev(c))}</span></div>
+    <div class="r"><span>Net debt (${c.ndDate})</span><span>${eurm(c.nd)}</span></div>
+    <div class="r"><span>EV/EBITDA 26E · 27E</span><span>${fx1(metricVal(c,"ev26"))} · ${fx1(metricVal(c,"ev27"))}</span></div>
+    <div class="r"><span>Net debt / EBITDA</span><span>${fx1(metricVal(c,"lev"))}</span></div>
+    <div class="r"><span>Capacity</span><span>${c.mw?nf(c.mw)+" MW":"—"}</span></div>
+    <div class="r"><span>Consensus target</span><span>${tpTxt}${up!=null?` (${up>=0?"+":""}${up.toFixed(0)}%)`:""}</span></div>
+    ${chg!=null?`<div class="r"><span>Today</span><span class="${chg>=0?"up":"dn"}">${pctS(chg)}</span></div>`:""}
+    <div class="d">${c.desc}</div>
+    <div class="hint">Click to ${S.sel.has(c.id)?"remove from":"add to"} the peer set · double-click for the full card</div>`;
+  tip.classList.add("on");
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  let x = e.clientX + 16, y = e.clientY + 16;
+  if (x + w > innerWidth - 10) x = e.clientX - w - 16;
+  if (y + h > innerHeight - 10) y = Math.max(10, innerHeight - h - 10);
+  tip.style.left = x+"px"; tip.style.top = y+"px";
+}
+function hideTip(){ tip.classList.remove("on"); }
+
+/* ========================================================== card ========= */
+function openCard(id){
+  hideTip();
+  const c = DATA.find(d=>d.id===id); if(!c) return;
+  const cur = c.ccy==="NOK" ? "kr" : "€";
+  const up = c.tp ? (c.tp/c.px-1)*100 : null;
+  const chg = c.prev ? (c.px/c.prev-1)*100 : null;
+  const on = S.sel.has(c.id);
+
+  $("#sheet").innerHTML = `
+   <div class="sheethead">
+     <div>
+       <h3 id="mtitle">${c.name}</h3>
+       <div class="m">${c.tic} · ${c.country} · ${BUCKETS[c.bucket]} · <a class="web" href="${c.web}" target="_blank" rel="noopener">${c.web.replace(/^https?:\/\//,"")} ↗</a></div>
+     </div>
+     <div class="close" style="display:flex;gap:8px">
+       <button id="mtoggle" class="${on?"":"primary"}">${on?"− Remove from peer set":"+ Add to peer set"}</button>
+       <button id="mclose" aria-label="Close">✕</button>
+     </div>
+   </div>
+   <div class="sheetbody">
+     <div class="kpis">
+       <div class="kpi"><div class="k">Price</div><div class="v">${cur}${c.px.toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:3})}</div>
+         <div class="k" style="margin-top:2px">${chg!=null?`<span class="${chg>=0?"up":"dn"}">${pctS(chg)}</span> today`:c.pxDate}</div></div>
+       <div class="kpi"><div class="k">Market cap</div><div class="v">${eurm(mcap(c))}</div></div>
+       <div class="kpi"><div class="k">Enterprise value</div><div class="v">${eurm(ev(c))}</div></div>
+       <div class="kpi"><div class="k">EV/EBITDA 26E</div><div class="v">${fx1(metricVal(c,"ev26"))}</div></div>
+       <div class="kpi"><div class="k">EV/EBITDA 27E</div><div class="v">${fx1(metricVal(c,"ev27"))}</div></div>
+       <div class="kpi"><div class="k">Net debt/EBITDA</div><div class="v">${fx1(metricVal(c,"lev"))}</div></div>
+     </div>
+
+     <p style="margin:0 0 18px;color:var(--ink2);font-size:12.5px;line-height:1.5">${c.desc}</p>
+
+     <div class="sec">Share price — last 12 months</div>
+     <div class="pxchart" id="pxchart" style="margin-bottom:20px"></div>
+
+     <div class="cols">
+       <div>
+         <div class="sec">Valuation &amp; capital structure</div>
+         <dl class="dl">
+           <dt>Shares outstanding</dt><dd>${nf(c.sh,1)}m</dd>
+           <dt>Market capitalisation</dt><dd>${eurm(mcap(c))}</dd>
+           <dt>Net financial debt</dt><dd>${eurm(c.nd)}</dd>
+           <dt>&nbsp;&nbsp;as reported at</dt><dd>${c.ndDate}</dd>
+           <dt>Enterprise value</dt><dd>${eurm(ev(c))}</dd>
+           <dt>EV / EBITDA LTM</dt><dd>${fx1(metricVal(c,"evL"))}</dd>
+           <dt>EV / EBITDA 2026E</dt><dd>${fx1(metricVal(c,"ev26"))}</dd>
+           <dt>EV / EBITDA 2027E</dt><dd>${fx1(metricVal(c,"ev27"))}</dd>
+           <dt>Net debt / EBITDA</dt><dd>${fx1(metricVal(c,"lev"))}</dd>
+           <dt>EV / MW installed</dt><dd>${evmw(c)==null?"n/m":"€"+fx2(evmw(c))+"m"}</dd>
+           <dt>Consensus target</dt><dd>${c.tp?cur+c.tp.toLocaleString("en-GB",{maximumFractionDigits:2}):"—"}${up!=null?` <span class="${up>=0?"up":"dn"}">(${up>=0?"+":""}${up.toFixed(0)}%)</span>`:""}</dd>
+           <dt>Rating · coverage</dt><dd>${c.rat}${c.nAn?` · ${c.nAn}`:""}</dd>
+         </dl>
+       </div>
+       <div>
+         <div class="sec">Financials &amp; operations (€m)</div>
+         <dl class="dl">
+           <dt>Revenue LTM</dt><dd>${nf(c.revL)}</dd>
+           <dt>EBITDA LTM</dt><dd>${nf(c.ebL)}</dd>
+           ${c.ebLadj!=null?`<dt>EBITDA LTM, ex one-offs</dt><dd>${nf(c.ebLadj)}</dd>`:""}
+           <dt>&nbsp;&nbsp;basis</dt><dd style="font-weight:500;color:var(--ink2)">${c.ebLbasis}</dd>
+           <dt>Revenue 2026E</dt><dd>${nf(c.rev26)}</dd>
+           <dt>EBITDA 2026E</dt><dd>${nf(c.eb26)}</dd>
+           <dt>EBITDA 2027E</dt><dd>${nf(c.eb27)}</dd>
+           <dt>&nbsp;&nbsp;estimates</dt><dd style="font-weight:500;color:var(--ink2);text-align:left">${c.estSrc}</dd>
+         </dl>
+         <div class="sec" style="margin-top:16px">Portfolio</div>
+         <div style="font-size:12px;color:var(--ink2);line-height:1.5">
+           <div><strong style="color:var(--ink)">Installed:</strong> ${c.cap}</div>
+           <div style="margin-top:4px"><strong style="color:var(--ink)">Pipeline:</strong> ${c.pipe}</div>
+         </div>
+       </div>
+     </div>
+
+     <div class="sec" style="margin-top:20px">What to watch when using this as a comparable</div>
+     <ul class="flags">${c.flags.map(f=>`<li>${f}</li>`).join("")}</ul>
+   </div>`;
+
+  $("#modal").classList.add("on");
+  $("#mclose").onclick = closeCard;
+  $("#mtoggle").onclick = ()=>{ toggle(c.id); openCard(c.id); };
+  drawPx(c);
+  $("#mclose").focus();
+}
+function closeCard(){ $("#modal").classList.remove("on"); }
+
+function drawPx(c){
+  const box = $("#pxchart");
+  if(!c.hist || c.hist.length < 8){
+    box.innerHTML = `<div class="pxempty">Price history loads with the live feed.<br>
+      ${S.live ? "This ticker did not return history on the last refresh." : "Press <strong>↻ Refresh prices</strong> in the header."}</div>`;
+    return;
+  }
+  const h = c.hist, ts = c.ts || [];
+  const W = 900, H = 210, pl = 46, pr = 14, pt = 12, pb = 24;
+  const mn = Math.min(...h), mx = Math.max(...h), rg = (mx-mn)||1;
+  const lo = mn - rg*0.08, hi = mx + rg*0.08, R = hi-lo;
+  const X = i => pl + (i/(h.length-1))*(W-pl-pr);
+  const Y = v => pt + (1-(v-lo)/R)*(H-pt-pb);
+  const cur = c.ccy==="NOK" ? "kr" : "€";
+  const up = h[h.length-1] >= h[0];
+  const col = "var(--s1)";
+
+  let g = "";
+  for(let k=0;k<=4;k++){
+    const v = lo + R*k/4, y = Y(v);
+    g += `<line x1="${pl}" y1="${y.toFixed(1)}" x2="${W-pr}" y2="${y.toFixed(1)}" stroke="var(--grid)" stroke-width="1"/>
+          <text class="axlab" x="${pl-7}" y="${(y+3.5).toFixed(1)}" text-anchor="end">${cur}${v.toFixed(v<20?2:0)}</text>`;
+  }
+  const line = h.map((v,i)=>`${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(" ");
+  const area = `${pl},${Y(lo).toFixed(1)} ${line} ${(W-pr)},${Y(lo).toFixed(1)}`;
+
+  let xl = "";
+  if(ts.length===h.length){
+    [0, Math.floor(h.length/3), Math.floor(2*h.length/3), h.length-1].forEach((i,k)=>{
+      const d = new Date(ts[i]*1000);
+      xl += `<text class="axlab" x="${X(i).toFixed(1)}" y="${H-6}" text-anchor="${k===0?"start":k===3?"end":"middle"}">${
+        d.toLocaleDateString("en-GB",{month:"short",year:"2-digit"})}</text>`;
+    });
+  }
+
+  box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" id="pxsvg" role="img"
+      aria-label="${c.name} share price, last 12 months, ${cur}${mn.toFixed(2)} to ${cur}${mx.toFixed(2)}">
+    <defs><linearGradient id="pxg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="${col}" stop-opacity=".22"/><stop offset="100%" stop-color="${col}" stop-opacity="0"/>
+    </linearGradient></defs>
+    ${g}${xl}
+    <polygon points="${area}" fill="url(#pxg)"/>
+    <polyline points="${line}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="${X(h.length-1).toFixed(1)}" cy="${Y(h[h.length-1]).toFixed(1)}" r="3.5" fill="${col}" stroke="var(--surface)" stroke-width="2"/>
+    <g id="cross" style="display:none">
+      <line id="cx" y1="${pt}" y2="${H-pb}" stroke="var(--axis)" stroke-width="1"/>
+      <circle id="cd" r="4.5" fill="${col}" stroke="var(--surface)" stroke-width="2"/>
+    </g>
+    <rect id="hit" x="${pl}" y="${pt}" width="${W-pl-pr}" height="${H-pt-pb}" fill="transparent"/>
+  </svg>
+  <div id="pxlab" style="position:absolute;pointer-events:none;opacity:0;transition:opacity .1s;
+      background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:6px 9px;
+      font-size:11.5px;font-variant-numeric:tabular-nums;white-space:nowrap;box-shadow:0 4px 14px rgba(0,0,0,.35)"></div>
+  <div style="display:flex;gap:18px;margin-top:6px;font-size:11px;color:var(--muted)">
+    <span>12m range ${cur}${mn.toFixed(2)} – ${cur}${mx.toFixed(2)}</span>
+    <span>12m change <span class="${up?"up":"dn"}">${((h[h.length-1]/h[0]-1)*100).toFixed(1)}%</span></span>
+  </div>`;
+
+  const svg = $("#pxsvg"), lab = $("#pxlab"), cross = svg.querySelector("#cross");
+  svg.querySelector("#hit").addEventListener("mousemove", e=>{
+    const r = svg.getBoundingClientRect();
+    const px = (e.clientX - r.left) * (W / r.width);
+    let i = Math.round(((px - pl)/(W-pl-pr))*(h.length-1));
+    i = Math.max(0, Math.min(h.length-1, i));
+    cross.style.display = "";
+    svg.querySelector("#cx").setAttribute("x1", X(i)); svg.querySelector("#cx").setAttribute("x2", X(i));
+    svg.querySelector("#cd").setAttribute("cx", X(i)); svg.querySelector("#cd").setAttribute("cy", Y(h[i]));
+    const d = ts[i] ? new Date(ts[i]*1000).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"2-digit"}) : "";
+    lab.innerHTML = `<strong>${cur}${h[i].toFixed(2)}</strong>${d?` &nbsp;<span style="color:var(--muted)">${d}</span>`:""}`;
+    lab.style.opacity = 1;
+    const bx = box.getBoundingClientRect();
+    let lx = (X(i)/W)*bx.width + 12;
+    if (lx + lab.offsetWidth > bx.width) lx -= lab.offsetWidth + 24;
+    lab.style.left = lx+"px";
+    lab.style.top  = Math.max(0,(Y(h[i])/H)*bx.height - 34)+"px";
+  });
+  svg.querySelector("#hit").addEventListener("mouseleave", ()=>{ cross.style.display="none"; lab.style.opacity=0; });
+}
+
+/* ========================================================== actions ====== */
+function toggle(id){ S.sel.has(id) ? S.sel.delete(id) : S.sel.add(id); render(); }
+function render(){ renderStats(); renderChart(); renderTable(); }
+
+/* ========================================================== live feed ==== */
+const qp = new URLSearchParams(location.search);
+const CUSTOM = qp.get("proxy");
+const RELAYS = [
+  ...(CUSTOM ? [u => CUSTOM.includes("{url}") ? CUSTOM.replace("{url}", encodeURIComponent(u)) : CUSTOM + encodeURIComponent(u)] : []),
+  u => "https://api.allorigins.win/raw?url=" + encodeURIComponent(u),
+  u => "https://corsproxy.io/?url=" + encodeURIComponent(u),
+  u => "https://api.codetabs.com/v1/proxy?quest=" + encodeURIComponent(u),
+  u => u
+];
+const YURL = t => `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(t)}?range=1y&interval=1d`;
+
+async function pull(ticker){
+  for (const mk of RELAYS){
+    try{
+      const ctl = new AbortController();
+      const to = setTimeout(()=>ctl.abort(), 14000);
+      const r = await fetch(mk(YURL(ticker)), { signal: ctl.signal, cache:"no-store" });
+      clearTimeout(to);
+      if(!r.ok) continue;
+      const txt = await r.text();
+      const j = JSON.parse(txt);
+      const res = j && j.chart && j.chart.result && j.chart.result[0];
+      if(!res || !res.meta || typeof res.meta.regularMarketPrice !== "number") continue;
+      const q = (res.indicators && res.indicators.quote && res.indicators.quote[0]) || {};
+      const cl = [], ts = [];
+      (q.close||[]).forEach((v,i)=>{ if(typeof v === "number" && isFinite(v)){ cl.push(v); ts.push((res.timestamp||[])[i]); } });
+      return { px:res.meta.regularMarketPrice, prev:res.meta.chartPreviousClose, hist:cl, ts:ts };
+    }catch(e){ /* try the next relay */ }
+  }
+  return null;
+}
+
+async function refresh(){
+  const btn = $("#refresh");
+  if (btn.disabled) return;
+  btn.disabled = true; btn.textContent = "↻ Refreshing…";
+  setStatus("live","Fetching live prices…");
+  $("#chart").style.opacity = .55; $("#tbody").style.opacity = .55;
+
+  const jobs = [...DATA.map(c=>({c, tic:c.tic})), {c:null, tic:"EURNOK=X"}];
+  let ok = 0, fail = 0;
+  const QUEUE = jobs.slice();
+  async function worker(){
+    while(QUEUE.length){
+      const j = QUEUE.shift();
+      const res = await pull(j.tic);
+      if(!res){ fail++; continue; }
+      ok++;
+      if(j.c){ j.c.px = res.px; j.c.prev = res.prev; j.c.hist = res.hist; j.c.ts = res.ts; j.c.live = true; }
+      else if(res.px > 0){ FX.EURNOK = res.px; }
+    }
+  }
+  await Promise.all([worker(),worker(),worker()]);
+
+  $("#chart").style.opacity = 1; $("#tbody").style.opacity = 1;
+  btn.disabled = false; btn.textContent = "↻ Refresh prices";
+
+  if(ok === 0){
+    S.live = false;
+    setStatus("err", `Snapshot ${SNAPSHOT} · live feed unreachable`);
+  } else {
+    S.live = true;
+    S.liveAt = new Date();
+    const t = S.liveAt.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"});
+    setStatus(fail ? "warn" : "ok",
+      fail ? `Live ${t} · ${ok}/${jobs.length} tickers` : `Live prices · ${t}`);
+  }
+  render();
+}
+
+function setStatus(kind, text){
+  $("#statusdot").className = "dot " + kind;
+  $("#statustxt").textContent = text;
+  $("#status").title = kind === "err"
+    ? "Public CORS relays are unreachable or rate-limited. Figures below are the 29-Jul-2026 snapshot. See the footer for a permanent relay you can deploy."
+    : kind === "warn" ? "Some tickers did not return; those rows still show snapshot prices."
+    : "Prices and 1-year history pulled from Yahoo Finance. Fundamentals remain at the snapshot date.";
+}
+
+/* ========================================================== init ========= */
+document.querySelectorAll(".chip[data-bucket]").forEach(b=>{
+  b.addEventListener("click", ()=>{
+    const k = b.dataset.bucket;
+    if(S.buckets.has(k)){ if(S.buckets.size===1) return; S.buckets.delete(k); } else S.buckets.add(k);
+    b.setAttribute("aria-pressed", S.buckets.has(k));
+    render();
+  });
+});
+$("#metricseg").querySelectorAll("button").forEach(b=>{
+  b.addEventListener("click", ()=>{
+    S.metric = b.dataset.metric;
+    $("#metricseg").querySelectorAll("button").forEach(x=>x.setAttribute("aria-pressed", x===b));
+    if(["evL","ev26","ev27","lev"].includes(S.sort.key)) { S.sort.key = S.metric; S.sort.dir = -1; }
+    render();
+  });
+});
+$("#adj").addEventListener("change", e=>{ S.adj = e.target.checked; render(); });
+$("#selall").addEventListener("click", ()=>{ visible().forEach(c=>S.sel.add(c.id)); render(); });
+$("#selnone").addEventListener("click", ()=>{ S.sel.clear(); render(); });
+$("#selcore").addEventListener("click", ()=>{ S.sel = new Set(CORE6); render(); });
+$("#ebitdaIn").addEventListener("input", ()=>renderStats());
+$("#refresh").addEventListener("click", refresh);
+$("#theme").addEventListener("click", ()=>{
+  const r = document.documentElement;
+  r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+  render();
+});
+$("#modal").addEventListener("click", e=>{ if(e.target.id === "modal") closeCard(); });
+document.addEventListener("keydown", e=>{ if(e.key === "Escape") closeCard(); });
+addEventListener("resize", ()=>renderChart());
+
+setStatus("", `Snapshot ${SNAPSHOT}`);
+render();
+setTimeout(refresh, 400);   /* try to go live on load; falls back silently */
+</script>
+</body>
+</html>
