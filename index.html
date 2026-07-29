@@ -1277,7 +1277,10 @@ async function pull(ticker){
       const q = (res.indicators && res.indicators.quote && res.indicators.quote[0]) || {};
       const cl = [], ts = [];
       (q.close||[]).forEach((v,i)=>{ if(typeof v === "number" && isFinite(v)){ cl.push(v); ts.push((res.timestamp||[])[i]); } });
-      return { px:res.meta.regularMarketPrice, prev:res.meta.chartPreviousClose, hist:cl, ts:ts };
+      /* meta.chartPreviousClose on a 1y range is the close a YEAR ago, not
+         yesterday — take the prior daily close from the series instead. */
+      const prev = cl.length > 1 ? cl[cl.length-2] : res.meta.chartPreviousClose;
+      return { px:res.meta.regularMarketPrice, prev:prev, hist:cl, ts:ts };
     }catch(e){ /* try the next relay */ }
   }
   return null;
